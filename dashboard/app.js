@@ -57,7 +57,7 @@ function kpis() {
   $('kpis').innerHTML = tiles.map(([l, val, foot, cls]) => `<div class="kpi ${cls}"><small>${l}<span aria-hidden="true">◦</span></small><strong>${val}</strong><em>${foot}</em></div>`).join('');
   $('n-farm').textContent = radar.verdicts.farm; $('n-marginal').textContent = radar.verdicts.marginal; $('n-skip').textContent = radar.verdicts.skip;
   $('nav-count').textContent = radar.rows.length;
-  $('caption').textContent = `${radar.rows.length} record no token and pass the screens`;
+  $('caption').textContent = `${radar.rows.length} protocols record no token and pass the screens`;
   $('coverage').textContent = `${radar.watchlist_size}/${radar.watchlist_size} watchlist · ${radar.version} · ${radar.bootstrap_rounds} refits`;
   $('side-date').textContent = radar.as_of; $('top-date').textContent = radar.as_of;
 }
@@ -86,11 +86,13 @@ function strip() {
   ].filter(Boolean).join('');
 }
 function guide() {
-  const b = radar.best_per_hour, e = radar.summary_economics;
-  $('guide').innerHTML = `<p class="eyebrow">READ TWO NUMBERS</p><h3>Value is not odds.<br>Odds are not a plan.</h3>
-    <div class="pair"><div><strong>×${radar.model.validation.typical_factor.toFixed(2)}</strong><span>value miss</span></div><div><strong>${(radar.odds_check.hit_rate * 100).toFixed(0)}%</strong><span>odds called right</span></div></div>
-    <p>${cash(e.deposit)} for ${e.horizon_weeks} weeks at a ${(e.drop_share * 100).toFixed(0)}% drop share, less two withdrawals and every transaction, against a ${(e.tbill_apr * 100).toFixed(0)}% T-bill.</p>
-    <hr><strong>Verdicts</strong><ol><li>Farm: clears fees and the benchmark, ${cash(e.min_per_hour)} an hour.</li><li>Marginal: clears fees only.</li><li>Skip: fees or risk win.</li></ol>
+  const v = radar.model.validation, o = radar.odds_check, ab = v.ablation, b = radar.best_per_hour, e = radar.summary_economics;
+  $('guide').innerHTML = `<p class="eyebrow">DOES IT HOLD ON TOKENS IT NEVER SAW?</p><h3>Every term, tested held out.</h3>
+    <ol><li>flat TVL multiple <b>×${ab.base_flat.toFixed(2)}</b></li><li>+ size curve <b>×${ab.size_curve.toFixed(2)}</b></li><li>+ sector offset <b>×${ab.size_and_category.toFixed(2)}</b></li><li>+ growth and age <b>×${ab.size_category_momentum_age.toFixed(2)}</b></li></ol>
+    <p>Each line refits with one more term, leaving one protocol out at a time. ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90.</p>
+    <hr><div class="pair"><div><strong>${(o.hit_rate * 100).toFixed(0)}%</strong><span>odds called right</span></div><div><strong>${(o.base_hit * 100).toFixed(0)}%</strong><span>base rate alone</span></div></div>
+    <p>A ridge logistic over size, tracking time and sector, scored five-fold: Brier ${o.brier.toFixed(3)} against ${o.base_brier.toFixed(3)} for the base rate.</p>
+    <hr><strong>Verdicts</strong><ol><li><b>Farm</b>: clears fees and a ${(e.tbill_apr * 100).toFixed(0)}% T-bill, ${cash(e.min_per_hour)} an hour.</li><li><b>Marginal</b>: clears fees only.</li><li><b>Skip</b>: fees or risk win.</li></ol>
     ${b ? `<p class="note">Best on the board: ${esc(b.name)}, ${cash(b.net)} net in ${b.hours.toFixed(1)} hands-on hours.</p>` : ''}
     <p class="note">Rewards are unverified and capital can be lost.</p>`;
 }
@@ -107,6 +109,7 @@ function board() {
       <td class="num val"><strong>${money(p.implied_value_usd)}</strong><small>${money(p.p25_usd)}–${money(p.p75_usd)}</small><span class="sbar" style="width:${Math.max(3, p.implied_value_usd / max * 42)}px" aria-hidden="true"></span></td>
       <td class="num"><strong>${(p.launch_odds * 100).toFixed(0)}%</strong><small>${p.rank_low === null ? '' : `rank ${p.rank_low}–${p.rank_high}`}</small></td>
       <td class="num">${money(p.tvl_usd)}</td><td class="num ${p.change_7d === null ? 'muted' : p.change_7d >= 0 ? 'pos' : 'neg'}">${pct(p.change_7d)}</td>
+      <td class="num">${p.age_days === null ? '—' : int(p.age_days)}</td>
       <td><span class="tag ${e.verdict}">${e.verdict.toUpperCase()}</span><span class="net">${cash(e.net)}</span><span class="hrs">${e.tradeable ? `$${e.per_hour.toFixed(0)}/h · fees ${cash(e.fees)}` : 'no funded route'}</span></td>
       <td><span class="tag ${e.verdict === 'skip' ? 'skip' : 'farm'}">${esc(p.plan.label)}</span></td>
       <td><button class="id" data-open="${esc(p.slug)}" aria-label="Open ${esc(p.name)}">↗</button></td></tr>`).join('');
@@ -139,7 +142,7 @@ function model() {
   $('model-content').innerHTML = `<div class="grid2">
     <article class="mcard full"><p class="eyebrow">WHAT THE NUMBER MEANS</p><h3>An if-it-launches value. Never a price.</h3>
       <div class="formula">log(value) = ${b[0].toFixed(4)} + ${b[1].toFixed(4)}·log(TVL/$100M) + ${b[2].toFixed(4)}·log(1+growth/100) + ${b[3].toFixed(4)}·log(1+years)</div>
-      <p>Growth clips to −60%…+120%, missing growth is 0, missing tracking age is 365 days, and days tracked is not launch age. Ridge ${radar.model.ridge}, unpenalised intercept; category residual means shrink with ${radar.model.category_prior} priors and clip at ±1.5 log units. No protocol name, document or launch guess enters the fit.</p></article>
+      <p>Growth clips to −60%…+120%, missing growth is 0, missing tracking age is 365 days, and days tracked is not launch age. The comparables are the ${radar.model.peer_count} live-token protocols whose cap/TVL sits between 0.02× and 40×: extreme micro-cap and mega-cap multiples are real but are noise as pricing anchors. Ridge ${radar.model.ridge}, unpenalised intercept; category residual means shrink with ${radar.model.category_prior} priors and clip at ±1.5 log units. No protocol name, document or launch guess enters the fit.</p></article>
     <article class="mcard"><p class="eyebrow">ONE TERM AT A TIME</p><h3>Miss on protocols left out.</h3>
       <div class="formula">flat TVL multiple    ×${ab.base_flat.toFixed(2)}
 + size curve (TVL^b) ×${ab.size_curve.toFixed(2)}

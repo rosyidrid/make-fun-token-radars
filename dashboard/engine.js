@@ -4,9 +4,9 @@ export { validateSnapshot } from '../lib/validate.js';
 // value()     what a token would be worth if it launched (log-linear, in live-token market caps)
 // odds()      how likely the protocol records a token       (logistic, in the board's population)
 // economics() what one deposit buys, less its transactions, against a T-bill
-export const MODEL_VERSION = 'fieldnote-3';
+export const MODEL_VERSION = 'fieldnote-4';
 export const ECONOMICS = { deposit: 10000, drop_share: 0.07, horizon_weeks: 12, tbill_apr: 0.04, min_per_hour: 25, plan_share_of_tvl: 0.0002 };
-const DAY = 86400000, MAX_VALUE = 1e14, RIDGE = 2, ODDS_RIDGE = 6, CATEGORY_PRIOR = 8, BOOTSTRAP = 200;
+const DAY = 86400000, MAX_VALUE = 1e14, RIDGE = 8, ODDS_RIDGE = 6, CATEGORY_PRIOR = 8, BOOTSTRAP = 200;
 const EXCLUDED = new Set(['Bridge', 'Canonical Bridge', 'Cross Chain Bridge', 'Liquid Staking',
   'Liquid Restaking', 'Restaked BTC', 'CEX', 'Staking Pool', 'Stablecoin Wrapper', 'Anchor BTC']);
 const EXCHANGES = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\b/i;
@@ -93,9 +93,13 @@ export function exclusionReason(p) {
   return null;
 }
 /** The protocols the value model may read: a recorded token, a positive cap, a sane cap/TVL. */
+// The comparable band: live-token protocols whose cap/TVL sits in a mainstream pricing range. The
+// very-high and very-low multiples are real, but as pricing anchors they are noise: a micro-cap's
+// multiple says little about the next launch. The band is stated in the methodology panel.
+export const PEER_BAND = { low: 0.02, high: 40 };
 export function valuePeers(protocols) {
   return protocols.filter(p => (p.gecko_id !== null || p.symbol !== null) && p.mcap_usd > 0
-    && p.category !== 'CEX' && p.mcap_usd / p.tvl_usd >= 0.001 && p.mcap_usd / p.tvl_usd <= 100)
+    && p.category !== 'CEX' && p.mcap_usd / p.tvl_usd >= PEER_BAND.low && p.mcap_usd / p.tvl_usd <= PEER_BAND.high)
     .sort((a, b) => order(a.slug, b.slug));
 }
 /** A flat multiple read at $100M of TVL: the baseline every fitted term must beat. */

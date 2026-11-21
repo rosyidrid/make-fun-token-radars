@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { validateSnapshot, buildRadar, predict, predict as predictValue, validateValue, valuePeers, fitOdds, validateOdds,
   oddsPopulation, oddsOf, exclusionReason, tokenRecorded, comparablePeers, economics, gasPerTx, family,
+  PEER_BAND,
   percentile, ECONOMICS } from '../dashboard/engine.js';
 import { planFor, plansFor } from '../lib/plans.js';
 import { RESEARCH, RESEARCH_DATE } from '../research-data.js';
@@ -70,9 +71,24 @@ test('the value model is judged three ways and beats the flat TVL multiple', () 
   assert.equal(v.folds, 5);
   for (const k of ['five_fold', 'leave_one_out', 'walk_forward', 'typical_factor', 'flat_factor']) assert.ok(v[k] >= 1);
   assert.ok(v.typical_factor < v.flat_factor, 'fitted terms must beat the flat multiple');
-  assert.ok(v.ablation.size_curve < v.ablation.base_flat);
+  assert.ok(v.ablation.base_flat > v.ablation.size_curve, 'the size curve must beat the flat multiple');
+  assert.ok(v.ablation.size_curve > v.ablation.size_and_category, 'the sector offset must add to the size curve');
+  assert.ok(v.ablation.size_and_category > v.ablation.size_category_momentum_age, 'growth and age must add to sector and size');
+  assert.ok(v.ablation.size_category_momentum_age <= v.typical_factor + 1e-9, 'the ladder must end at the leave-one-out fit');
   assert.ok(v.range_holds.p10_p90 > v.range_holds.p25_p75);
   assert.deepEqual(validateValue(valuePeers([...snapshot.protocols].reverse()), snapshot.as_of), v);
+});
+
+test('the valuation comparables sit inside the stated cap/TVL band', () => {
+  const peers = valuePeers(snapshot.protocols);
+  assert.ok(peers.length >= 60);
+  for (const p of peers) {
+    const multiple = p.mcap_usd / p.tvl_usd;
+    assert.ok(multiple >= PEER_BAND.low && multiple <= PEER_BAND.high, `${p.slug} sits at ${multiple}`);
+    assert.ok(p.mcap_usd > 0 && p.category !== 'CEX');
+    assert.ok(tokenRecorded(p));
+  }
+  assert.deepEqual(peers.map(p => p.slug), [...peers].sort((a, b) => a.slug < b.slug ? -1 : 1).map(p => p.slug));
 });
 
 test('the odds model is scored held-out on the population the board reads', () => {
