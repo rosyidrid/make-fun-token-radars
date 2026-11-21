@@ -95,7 +95,8 @@ try {
   assert.match(await page.locator('#model-content').innerText(), /walk-forward/);
   await visit('ledger');
   assert.equal(await page.locator('#ledger-body tr').count(), 25);
-  assert.match(await page.locator('#ledger-chips').innerText(), /Ranked here/);
+  assert.match(await page.locator('#ledger-chips').innerText(), /Ranked: watchlist/);
+  assert.match(await page.locator('#ledger-chips').innerText(), /Ranked: below the floor/);
 
   await mkdir('test-results', { recursive: true });
   for (const v of [{ width: 375, height: 812 }, { width: 812, height: 375 }]) {

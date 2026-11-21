@@ -169,8 +169,8 @@ function ledger() {
   state.ledgerPage = Math.min(state.ledgerPage, Math.max(0, Math.ceil(rows.length / LEDGER_PAGE) - 1));
   const start = state.ledgerPage * LEDGER_PAGE;
   $('ledger-body').innerHTML = rows.slice(start, start + LEDGER_PAGE).map(l => `<tr><td><b>${esc(l.name)}</b><i>${esc(l.category ?? 'Unclassified')}</i></td>
-    <td><span class="tag ${l.group === 'Ranked here' ? 'farm' : l.group === 'Token trades' ? 'marginal' : 'skip'}">${esc(l.group)}</span></td>
-    <td class="muted">${esc(l.record)}${l.group === 'Ranked here' ? ' · ranked on the board' : ''}</td><td class="num">${money(l.tvl_usd)}</td></tr>`).join('')
+    <td><span class="tag ${l.group.startsWith('Ranked') ? 'farm' : l.group === 'Token trades' ? 'marginal' : 'skip'}">${esc(l.group)}</span></td>
+    <td class="muted">${esc(l.record)}${l.group.startsWith('Ranked') ? ' · ranked on the board' : ''}</td><td class="num">${money(l.tvl_usd)}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">No protocol in this group.</td></tr>';
   $('ledger-info').textContent = `${rows.length ? start + 1 : 0}–${Math.min(start + LEDGER_PAGE, rows.length)} of ${rows.length}`;
   $('ledger-prev').disabled = start === 0; $('ledger-next').disabled = start + LEDGER_PAGE >= rows.length;

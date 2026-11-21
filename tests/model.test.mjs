@@ -23,6 +23,18 @@ test('the sealed snapshot is fully classified and the board covers the watchlist
   assert.deepEqual(radar.rows.filter(r => r.watchlist).map(r => r.slug).sort(), [...snapshot.watchlist].sort());
 });
 
+test('the ledger names the board both above and below the house floor', () => {
+  const above = radar.rows.filter(r => !r.watchlist && r.tvl_usd >= radar.floor_usd);
+  const below = radar.rows.filter(r => r.tvl_usd < radar.floor_usd);
+  assert.equal(radar.ledger_groups['Ranked: watchlist'], snapshot.watchlist.length);
+  assert.equal(radar.ledger_groups['Ranked: below the floor'], below.length);
+  assert.equal(radar.ledger_groups['Ranked: off the list'], above.length);
+  assert.ok(below.length > 40, 'the board must reach well past the watchlist floor');
+  for (const slug of below.map(r => r.slug)) {
+    assert.equal(radar.ledger.find(l => l.slug === slug).group, 'Ranked: below the floor');
+  }
+});
+
 test('ranks are contiguous, values descend and the build is deterministic', () => {
   assert.deepEqual(radar.rows.map(r => r.rank), radar.rows.map((_, i) => i + 1));
   for (const [i, r] of radar.rows.entries()) {

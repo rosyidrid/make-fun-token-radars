@@ -310,10 +310,15 @@ const LEDGER_CATEGORY = new Map([
   ['CEX', 'Exchange custody'], ['Stablecoin Wrapper', 'Stablecoin wrapper'],
 ]);
 function ledgerGroups(snapshot, ranked) {
+  const watch = new Set(snapshot.watchlist);
   return snapshot.protocols.map(p => {
     const reason = exclusionReason(p);
+    // The board ranks past the watchlist on both sides: the two floor groups say so, so the reader
+    // can see the list is the floor and never the ceiling.
+    const held = watch.has(p.slug) ? 'Ranked: watchlist'
+      : p.tvl_usd < snapshot.floor_usd ? 'Ranked: below the floor' : 'Ranked: off the list';
     const group = tokenRecorded(p) ? (p.mcap_usd !== null && p.mcap_usd > 0 ? 'Token trades' : 'Token on record')
-      : ranked.has(p.slug) ? 'Ranked here'
+      : ranked.has(p.slug) ? held
       : LEDGER_CATEGORY.get(p.category) ?? (reason === 'Versioned product of another protocol' ? 'Versioned listing'
         : reason === 'Name carries existing-token exposure' ? 'Wrapped or staked'
         : reason === 'Exchange-linked product' ? 'Exchange custody'
