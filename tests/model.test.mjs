@@ -81,11 +81,22 @@ test('names never move a valuation and missing inputs are explicit assumptions',
 test('the value model is judged three ways and beats the flat TVL multiple', () => {
   const v = radar.model.validation;
   assert.equal(v.folds, 5);
-  for (const k of ['five_fold', 'leave_one_out', 'walk_forward', 'typical_factor', 'flat_factor']) assert.ok(v[k] >= 1);
+  for (const k of ['five_fold', 'leave_one_out', 'walk_forward', 'typical_factor', 'flat_factor',
+    'five_fold_median', 'leave_one_out_median', 'walk_forward_median', 'typical_median', 'flat_median']) {
+    assert.ok(v[k] >= 1, `${k} must be a miss factor`);
+  }
   assert.ok(v.typical_factor < v.flat_factor, 'fitted terms must beat the flat multiple');
+  assert.ok(v.typical_median < v.flat_median, 'fitted terms must beat the flat multiple on the typical miss');
+  assert.ok(v.typical_median < v.typical_factor, 'the typical miss must sit below the tail-dragged mean');
+  const rungs = ['base_flat', 'size_curve', 'size_and_category', 'size_category_growth', 'size_category_momentum_age'];
+  for (const k of ['ablation', 'ablation_median']) {
+    for (let i = 1; i < rungs.length; i++) {
+      assert.ok(v[k][rungs[i]] <= v[k][rungs[i - 1]] + 1e-9, `${k}: ${rungs[i]} must not be worse than ${rungs[i - 1]}`);
+    }
+  }
   assert.ok(v.ablation.base_flat > v.ablation.size_curve, 'the size curve must beat the flat multiple');
   assert.ok(v.ablation.size_curve > v.ablation.size_and_category, 'the sector offset must add to the size curve');
-  assert.ok(v.ablation.size_and_category > v.ablation.size_category_momentum_age, 'growth and age must add to sector and size');
+  assert.ok(v.ablation.size_category_momentum_age < v.ablation.size_and_category - 0.02, 'the age term must move the miss');
   assert.ok(v.ablation.size_category_momentum_age <= v.typical_factor + 1e-9, 'the ladder must end at the leave-one-out fit');
   assert.ok(v.range_holds.p10_p90 > v.range_holds.p25_p75);
   assert.deepEqual(validateValue(valuePeers([...snapshot.protocols].reverse()), snapshot.as_of), v);

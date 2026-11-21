@@ -49,7 +49,7 @@ function kpis() {
   const tiles = [
     ['RANKED', int(radar.rows.length), `${int(radar.universe_size)} records read in all`, ''],
     ['IF IT LAUNCHES', money(radar.board_value_usd), `odds-weighted ${money(radar.board_odds_value_usd)}`, 'hi'],
-    ['VALUE MISS, HELD OUT', `×${v.typical_factor.toFixed(2)}`, `flat TVL multiple ×${v.flat_factor.toFixed(2)}`, v.typical_factor < v.flat_factor ? 'hi' : 'warn'],
+    ['VALUE MISS, HELD OUT', `×${v.typical_median.toFixed(2)}`, `typical · mean ×${v.typical_factor.toFixed(2)} · flat ×${v.flat_median.toFixed(2)}`, v.typical_median < v.flat_median ? 'hi' : 'warn'],
     ['ODDS CALLED RIGHT', `${(o.hit_rate * 100).toFixed(0)}%`, `base rate ${(o.base_hit * 100).toFixed(0)}% · Brier ${o.brier.toFixed(3)} vs ${o.base_brier.toFixed(3)}`, 'hi'],
     ['WORTH FARMING', `${radar.verdicts.farm}<u> farm</u>`, `${radar.verdicts.marginal} marginal · ${radar.verdicts.skip} skip`, radar.verdicts.farm ? 'hi' : 'warn'],
     ['BEST PER HOUR', b ? `$${b.per_hour.toFixed(0)}<u>/h</u>` : '—', b ? `${esc(b.name)} · net ${cash(b.net)} · ${b.hours.toFixed(1)}h` : '', ''],
@@ -86,10 +86,10 @@ function strip() {
   ].filter(Boolean).join('');
 }
 function guide() {
-  const v = radar.model.validation, o = radar.odds_check, ab = v.ablation, b = radar.best_per_hour, e = radar.summary_economics;
+  const v = radar.model.validation, o = radar.odds_check, ab = v.ablation_median, b = radar.best_per_hour, e = radar.summary_economics;
   $('guide').innerHTML = `<p class="eyebrow">DOES IT HOLD ON TOKENS IT NEVER SAW?</p><h3>Every term, tested held out.</h3>
-    <ol><li>flat TVL multiple <b>×${ab.base_flat.toFixed(2)}</b></li><li>+ size curve <b>×${ab.size_curve.toFixed(2)}</b></li><li>+ sector offset <b>×${ab.size_and_category.toFixed(2)}</b></li><li>+ growth and age <b>×${ab.size_category_momentum_age.toFixed(2)}</b></li></ol>
-    <p>Each line refits with one more term, leaving one protocol out at a time. ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90.</p>
+    <ol><li>flat TVL multiple <b>×${ab.base_flat.toFixed(2)}</b></li><li>+ size curve <b>×${ab.size_curve.toFixed(2)}</b></li><li>+ sector offset <b>×${ab.size_and_category.toFixed(2)}</b></li><li>+ 7-day growth <b>×${ab.size_category_growth.toFixed(2)}</b> (flat)</li><li>+ no-token age <b>×${ab.size_category_momentum_age.toFixed(2)}</b></li></ol>
+    <p>Typical (median) miss on the protocol held out, refit each time. ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90.</p>
     <hr><div class="pair"><div><strong>${(o.hit_rate * 100).toFixed(0)}%</strong><span>odds called right</span></div><div><strong>${(o.base_hit * 100).toFixed(0)}%</strong><span>base rate alone</span></div></div>
     <p>A ridge logistic over size, tracking time and sector, scored five-fold: Brier ${o.brier.toFixed(3)} against ${o.base_brier.toFixed(3)} for the base rate.</p>
     <hr><strong>Verdicts</strong><ol><li><b>Farm</b>: clears fees and a ${(e.tbill_apr * 100).toFixed(0)}% T-bill, ${cash(e.min_per_hour)} an hour.</li><li><b>Marginal</b>: clears fees only.</li><li><b>Skip</b>: fees or risk win.</li></ol>
@@ -182,11 +182,15 @@ function model() {
       <div class="formula">log(value) = ${b[0].toFixed(4)} + ${b[1].toFixed(4)}·log(TVL/$100M) + ${b[2].toFixed(4)}·log(1+growth/100) + ${b[3].toFixed(4)}·log(1+years)</div>
       <p>Growth clips to −60%…+120%, missing growth is 0, missing tracking age is 365 days, and days tracked is not launch age. The comparables are the ${radar.model.peer_count} live-token protocols whose cap/TVL sits between 0.02× and 40×: extreme micro-cap and mega-cap multiples are real but are noise as pricing anchors. Ridge ${radar.model.ridge}, unpenalised intercept; category residual means shrink with ${radar.model.category_prior} priors and clip at ±1.5 log units. No protocol name, document or launch guess enters the fit.</p></article>
     <article class="mcard"><p class="eyebrow">ONE TERM AT A TIME</p><h3>Miss on protocols left out.</h3>
-      <div class="formula">flat TVL multiple    ×${ab.base_flat.toFixed(2)}
-+ size curve (TVL^b) ×${ab.size_curve.toFixed(2)}
-+ category offset    ×${ab.size_and_category.toFixed(2)}
-+ growth and age     ×${ab.size_category_momentum_age.toFixed(2)}</div>
-      <p>Each line refits with one more term, leaving one protocol out at a time. Walk-forward refits only on protocols DefiLlama began tracking earlier, so a later one is never priced by itself. ${v.leave_one_out.toFixed(2)} leave-one-out and ${v.walk_forward.toFixed(2)} walk-forward disagree, so the headline is the pooled ×${v.typical_factor.toFixed(2)}.</p>
+      <div class="formula">term added            typical  mean
+flat TVL multiple      ×${v.ablation_median.base_flat.toFixed(2)}   ×${ab.base_flat.toFixed(2)}
++ size curve (TVL^b)   ×${v.ablation_median.size_curve.toFixed(2)}   ×${ab.size_curve.toFixed(2)}
++ category offset      ×${v.ablation_median.size_and_category.toFixed(2)}   ×${ab.size_and_category.toFixed(2)}
++ 7-day growth         ×${v.ablation_median.size_category_growth.toFixed(2)}   ×${ab.size_category_growth.toFixed(2)}
++ no-token age         ×${v.ablation_median.size_category_momentum_age.toFixed(2)}   ×${ab.size_category_momentum_age.toFixed(2)}</div>
+      <p>Each line refits with one more term, leaving one protocol out at a time. Typical is the median absolute miss, which the heavy right tail cannot drag; the mean is the tail-inclusive one. Growth barely moves the number once size and sector are in, and the page says so rather than claiming a lift it does not have.</p>
+      <p>Walk-forward refits only on protocols DefiLlama began tracking earlier, so a later one is never priced by itself: ${v.leave_one_out_median.toFixed(2)} typical leave-one-out against ${v.walk_forward_median.toFixed(2)} walk-forward, pooled ×${v.typical_median.toFixed(2)} typical and ×${v.typical_factor.toFixed(2)} mean.</p>
+      <p>${radar.bootstrap_rounds} bootstrap refits of the ${radar.model.peer_count} comparables give every row its band and rank span; ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90. Model-error bands, not a confidence interval.</p></article>
       <p>${radar.bootstrap_rounds} bootstrap refits of the ${radar.model.peer_count} comparables give every row its band and rank span; ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90. Model-error bands, not a confidence interval.</p></article>
     <article class="mcard"><p class="eyebrow">THE SECOND MODEL</p><h3>How likely a token arrives.</h3>
       <div class="pair"><div><strong>${(o.hit_rate * 100).toFixed(0)}%</strong><span>called right, ${o.n} protocols</span></div><div><strong>${(o.base_hit * 100).toFixed(0)}%</strong><span>base rate alone</span></div></div>
@@ -207,7 +211,7 @@ function detail(slug, tab = state.tab) {
     <div class="peer"><table><thead><tr><th>LIVE-TOKEN PEER</th><th class="num">TVL</th><th class="num">MARKET CAP</th><th class="num">CAP/TVL</th><th>MATCH</th></tr></thead>
       <tbody>${p.peers.map(q => `<tr><td><b>${esc(q.name)}</b><i>${esc(q.category)}</i></td><td class="num">${money(q.tvl_usd)}</td><td class="num">${money(q.mcap_usd)}</td><td class="num">${q.multiple.toFixed(2)}×</td><td><span class="tag ${q.same_category ? 'farm' : 'marginal'}">${q.same_category ? 'Same sector' : q.same_family ? 'Related family' : 'Other sector'}</span></td></tr>`).join('')}</tbody></table></div>
     <div class="facts">${[['REFERENCE', money(f.intercept_usd)], ['TVL', `×${f.tvl.toFixed(3)}`], ['GROWTH', `×${f.growth.toFixed(3)}`], ['AGE', `×${f.age.toFixed(3)}`], ['SECTOR', `×${f.category.toFixed(3)}`]].map(([k, val]) => `<div><small>${k}</small><b>${val}</b></div>`).join('')}</div>
-    <p class="note">Reference × the four terms gives the base estimate before rounding. ${money(p.p25_usd)}–${money(p.p75_usd)} is the middle half of ${radar.bootstrap_rounds} refits, ranking it ${p.rank_low}–${p.rank_high} across them. The pooled held-out miss is ×${v.typical_factor.toFixed(2)}, so read the band as a wide hint.</p>
+    <p class="note">Reference × the four terms gives the base estimate before rounding. ${money(p.p25_usd)}–${money(p.p75_usd)} is the middle half of ${radar.bootstrap_rounds} refits, ranking it ${p.rank_low}–${p.rank_high} across them. The pooled held-out miss is ×${v.typical_median.toFixed(2)} typical and ×${v.typical_factor.toFixed(2)} mean, so read the band as a wide hint.</p>
     <h3 style="margin-top:16px">The odds, unpacked</h3>
     <p class="note">The ${(p.launch_odds * 100).toFixed(0)}% comes from this protocol's size, the ${p.age_days === null ? 'unknown (365 days assumed)' : int(p.age_days) + ' days'} DefiLlama has tracked it and its business family. Across the ${radar.odds_check.n} protocols the board reads, the model calls ${(radar.odds_check.hit_rate * 100).toFixed(0)}% right against a ${(radar.odds_check.base_hit * 100).toFixed(0)}% base rate.</p>`;
   const farm = `<h3>${esc(plan.label)} · ${esc(plan.chain)}</h3>

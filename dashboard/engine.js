@@ -24,6 +24,13 @@ const FAMILY_OF = [
 export const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const order = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const mean = v => v.reduce((s, n) => s + n, 0) / Math.max(v.length, 1);
+// The typical miss: the median absolute log error, which the heavy right tail of log-cap errors
+// cannot drag. Both are reported; the mean is the tail-inclusive one.
+const median = v => {
+  if (!v.length) return 0;
+  const s = [...v].sort((a, b) => a - b), mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+};
 const finite = n => typeof n === 'number' && Number.isFinite(n);
 const dot = (a, b) => a.reduce((s, n, i) => s + n * b[i], 0);
 const expit = z => 1 / (1 + Math.exp(-clamp(z, -30, 30)));
@@ -84,6 +91,31 @@ function fitValue(peers, asOf) {
 }
 const logValue = (p, asOf, model) => dot(valueFeatures(p, asOf), model.coefficients)
   + (model.categories[p.category ?? 'Unknown']?.adjustment ?? 0);
+/** The same fit over any subset of the four terms, so one term can be added at a time. */
+function fitTerms(peers, asOf, keep) {
+  const k = keep.length;
+  const m = Array.from({ length: k }, () => Array(k).fill(0)), v = Array(k).fill(0);
+  for (const p of peers) {
+    const full = valueFeatures(p, asOf), x = keep.map(i => full[i]), y = Math.log(p.mcap_usd);
+    for (let a = 0; a < k; a++) {
+      v[a] += x[a] * y;
+      for (let b = 0; b < k; b++) m[a][b] += x[a] * x[b];
+    }
+  }
+  for (let a = 1; a < k; a++) m[a][a] += RIDGE;
+  const coefficients = solve(m, v);
+  const groups = new Map();
+  for (const p of peers) {
+    const key = p.category ?? 'Unknown', full = valueFeatures(p, asOf);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(Math.log(p.mcap_usd) - keep.reduce((s, i, a) => s + full[i] * coefficients[a], 0));
+  }
+  const categories = {};
+  for (const [key, r] of groups) categories[key] = clamp(mean(r) * r.length / (r.length + CATEGORY_PRIOR), -1.5, 1.5);
+  return { coefficients, keep, categories };
+}
+const logTerms = (p, asOf, model) => model.keep.reduce((s, i, a) => s + valueFeatures(p, asOf)[i] * model.coefficients[a], 0)
+  + (model.categories[p.category ?? 'Unknown'] ?? 0);
 /** Why a no-token protocol is left out: a wrapped, bridged, versioned or exchange-linked record. */
 export function exclusionReason(p) {
   if (EXCLUDED.has(p.category)) return 'Wrapped, staked, bridged or exchange exposure';
@@ -104,18 +136,7 @@ export function valuePeers(protocols) {
 }
 /** A flat multiple read at $100M of TVL: the baseline every fitted term must beat. */
 const flatMultiple = (peers, asOf) => percentile(peers.map(p => Math.log(p.mcap_usd / p.tvl_usd)), 0.5);
-/** The smallest honest model: a slope on log TVL and nothing else. */
-function solveSizeOnly(peers) {
-  let sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (const p of peers) {
-    const x = Math.log(p.tvl_usd / 1e8), y = Math.log(p.mcap_usd);
-    sx += x; sy += y; sxx += x * x; sxy += x * y;
-  }
-  const n = peers.length, denom = n * sxx - sx * sx;
-  if (Math.abs(denom) < 1e-9) return [mean(peers.map(p => Math.log(p.mcap_usd))), 0, 0, 0];
-  const slope = (n * sxy - sx * sy) / denom;
-  return [(sy - slope * sx) / n, slope, 0, 0];
-}
+/** The flat multiple stays the baseline; validateValue's ladder adds one fitted term at a time to it. */
 // Every term is judged by how much it lowers the miss on protocols it never saw. Three schemes: five folds…
 export function validateValue(peers, asOf) {
   const foldFull = [], foldFlat = [];
@@ -127,15 +148,28 @@ export function validateValue(peers, asOf) {
       foldFlat.push(Math.abs(Math.log(p.mcap_usd) - Math.log(p.tvl_usd) - flat));
     }
   }
-  const looFull = [], looFlat = [], looSize = [], looSizeCategory = [], residual = [];
+  const LADDER = [['size_curve', [0, 1], false], ['size_and_category', [0, 1], true],
+    ['size_category_growth', [0, 1, 2], true], ['size_category_momentum_age', [0, 1, 2, 3], true]];
+  const looFull = [], looFlat = [], residual = [];
+  const ladder = { base_flat: [], size_curve: [], size_and_category: [],
+    size_category_growth: [], size_category_momentum_age: [] };
+  const fits = new Map();
   for (let i = 0; i < peers.length; i++) {
-    const p = peers[i], train = peers.filter((_, j) => j !== i);
-    const m = fitValue(train, asOf), size = solveSizeOnly(train);
-    looFull.push(Math.abs(Math.log(p.mcap_usd) - logValue(p, asOf, m)));
-    looFlat.push(Math.abs(Math.log(p.mcap_usd) - Math.log(p.tvl_usd) - flatMultiple(train, asOf)));
-    looSize.push(Math.abs(Math.log(p.mcap_usd) - dot(valueFeatures(p, asOf), size)));
-    looSizeCategory.push(Math.abs(Math.log(p.mcap_usd) - (dot(valueFeatures(p, asOf), size) + (m.categories[p.category ?? 'Unknown']?.adjustment ?? 0))));
-    residual.push(Math.log(p.mcap_usd) - logValue(p, asOf, m));
+    const p = peers[i], train = peers.filter((_, j) => j !== i), y = Math.log(p.mcap_usd);
+    const m = fitValue(train, asOf), flat = flatMultiple(train, asOf);
+    looFull.push(Math.abs(y - logValue(p, asOf, m)));
+    looFlat.push(Math.abs(y - Math.log(p.tvl_usd) - flat));
+    residual.push(y - logValue(p, asOf, m));
+    ladder.base_flat.push(Math.abs(y - Math.log(p.tvl_usd) - flat));
+    for (const [name, keep, useCategory] of LADDER) {
+      const key = keep.join(',');
+      if (!fits.has(key)) fits.set(key, []);
+      if (!fits.get(key)[i]) fits.get(key)[i] = fitTerms(train, asOf, keep);
+      const fitted = fits.get(key)[i];
+      const predicted = useCategory ? logTerms(p, asOf, fitted)
+        : keep.reduce((s, k, a) => s + valueFeatures(p, asOf)[k] * fitted.coefficients[a], 0);
+      ladder[name].push(Math.abs(y - predicted));
+    }
   }
   const byDate = [...peers].sort((a, b) => order(a.listed_at ?? '9999', b.listed_at ?? '9999') || order(a.slug, b.slug));
   const walkFull = [], walkFlat = [];
@@ -144,17 +178,25 @@ export function validateValue(peers, asOf) {
     walkFull.push(Math.abs(Math.log(p.mcap_usd) - logValue(p, asOf, m)));
     walkFlat.push(Math.abs(Math.log(p.mcap_usd) - Math.log(p.tvl_usd) - flatMultiple(train, asOf)));
   }
-  const factor = v => Math.exp(mean(v));
-  const errs = [...looFull, ...walkFull];
+  const factor = v => Math.exp(mean(v)), typical = v => Math.exp(median(v));
+  const errs = [...looFull, ...walkFull], flats = [...looFlat, ...walkFlat];
   const within = hi => errs.filter(v => v <= hi).length / errs.length;
+  const ablation = {}, ablation_median = {};
+  for (const [name, list] of Object.entries(ladder)) {
+    ablation[name] = factor(list);
+    ablation_median[name] = typical(list);
+  }
   return {
     folds: 5,
     five_fold: factor(foldFull), five_fold_flat: factor(foldFlat),
+    five_fold_median: typical(foldFull), five_fold_flat_median: typical(foldFlat),
     leave_one_out: factor(looFull), leave_one_out_flat: factor(looFlat),
+    leave_one_out_median: typical(looFull), leave_one_out_flat_median: typical(looFlat),
     walk_forward: factor(walkFull), walk_forward_flat: factor(walkFlat),
-    typical_factor: factor(errs), flat_factor: factor([...looFlat, ...walkFlat]),
-    ablation: { base_flat: factor([...looFlat, ...walkFlat]), size_curve: factor(looSize),
-      size_and_category: factor(looSizeCategory), size_category_momentum_age: factor(looFull) },
+    walk_forward_median: typical(walkFull), walk_forward_flat_median: typical(walkFlat),
+    typical_factor: factor(errs), typical_median: typical(errs),
+    flat_factor: factor(flats), flat_median: typical(flats),
+    ablation, ablation_median,
     residual_low: percentile(residual, 0.1), residual_high: percentile(residual, 0.9),
     range_holds: { p25_p75: within(Math.log(1.5)), p10_p90: within(Math.log(2.5)) },
   };
