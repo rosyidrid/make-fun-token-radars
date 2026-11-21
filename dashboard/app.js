@@ -1,286 +1,261 @@
-import { buildRadar, validateSnapshot, farmPlan } from './engine.js';
+import { buildRadar, validateSnapshot, economics } from './engine.js';
 import { RESEARCH_DATE } from './research.js';
-
 const $ = id => document.getElementById(id);
-const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = value => {
-  if (value === null || value === undefined || value < 0) return 'Not reported';
-  const n = Math.abs(value);
-  return '$' + (n >= 1e9 ? (value / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (value / 1e6).toFixed(1) + 'M'
-    : n >= 1e3 ? (value / 1e3).toFixed(1) + 'K' : value.toFixed(0));
-};
-const integer = n => new Intl.NumberFormat('en-US').format(n);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = v => v === null || v === undefined || v < 0 ? '—'
+  : '$' + (v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M'
+    : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toFixed(v < 10 ? 2 : 0));
+const cash = v => (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
+const int = n => new Intl.NumberFormat('en-US').format(n);
 const pct = n => n === null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
-const byText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
-const PAGE_SIZE = 9;
-const LEDGER_PAGE_SIZE = 25;
-let radar;
-let activeProtocol = null;
-let detailTab = 'evidence';
-let pilotBudget = 100;
-const state = { scope: 'all', search: '', category: '', chain: '', review: false, sort: 'implied_value_usd', direction: -1, page: 0,
-  ledgerSearch: '', ledgerStatus: '', ledgerPage: 0 };
-
-function protocolIcon(p) {
-  const hues = [106, 40, 172, 22, 70, 214];
-  const seed = [...p.slug].reduce((n, c) => n + c.charCodeAt(0), 0);
-  const hue = hues[seed % hues.length];
-  return `<span class="protocol-icon" style="--icon-bg:hsl(${hue} 25% 91%);--icon-ink:hsl(${hue} 25% 33%)" aria-hidden="true">${escape(p.name[0])}</span>`;
-}
-
-function options(select, values, first) {
-  select.innerHTML = `<option value="">${escape(first)}</option>` + [...new Set(values)].sort(byText)
-    .map(value => `<option value="${escape(value)}">${escape(value)}</option>`).join('');
-}
-
-function stats() {
-  const underFloor = radar.rows.filter(p => p.tvl_usd < radar.floor_usd).length;
-  const totalTVL = radar.rows.reduce((sum, p) => sum + p.tvl_usd, 0);
-  const model = radar.model;
-  const cards = [
-    ['PROTOCOLS IN VIEW', integer(radar.rows.length), `${integer(radar.universe_size)} records fully classified`, '◉'],
-    ['WATCHLIST COVERAGE', `${radar.watchlist_size}<small> / ${radar.watchlist_size}</small>`, '<strong>100% covered</strong> · no omissions', '✓'],
-    ['CANDIDATE TVL', money(totalTVL), `${underFloor} discoveries below the $50M floor`, '↗'],
-    ['VALUATION PEERS', integer(model.peer_count), `5-fold error: ×/÷${model.validation.typical_factor.toFixed(1)} · not precise`, '⌁'],
-  ];
-  $('stats').innerHTML = cards.map(([label, value, foot, icon]) => `<div class="stat"><span class="stat-label">${label}<span aria-hidden="true">${icon}</span></span><strong class="stat-number">${value}</strong><span class="stat-foot">${foot}</span></div>`).join('');
-  $('nav-count').textContent = radar.rows.length;
-  $('candidate-caption').textContent = `${radar.rows.length} no-token-record candidates`;
-  $('coverage-note').textContent = `${radar.watchlist_size}/${radar.watchlist_size} watchlist · ${radar.version}`;
-  $('side-date').textContent = radar.as_of;
-  $('top-date').textContent = radar.as_of;
-}
-
-function filteredRows() {
-  const query = state.search.trim().toLowerCase();
+const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const PAGE = 8, LEDGER_PAGE = 25;
+const WHY = { farm: 'the drop clears the fees and the benchmark', marginal: 'the drop clears the fees, not the benchmark', skip: 'fees or risk exceed the modelled drop' };
+let radar, proof = null;
+const state = { verdict: 'all', scope: 'all', search: '', category: '', chain: '', review: false, sort: 'implied_value_usd', dir: -1,
+  page: 0, deposit: 10000, share: 0.07, ledgerSearch: '', ledgerGroup: '', ledgerPage: 0, open: null, tab: 'evidence' };
+/** Every row's economics under the reader's own scenario, from the same fitted models. */
+const scenario = row => economics(row, { deposit: state.deposit, drop_share: state.share });
+const value = p => state.sort === 'name' ? null : (p[state.sort] ?? -999);
+function rowsFor() {
+  const q = state.search.trim().toLowerCase();
   return radar.rows.filter(p =>
-    (state.scope === 'all' || (state.scope === 'watchlist' ? p.watchlist
+    (state.verdict === 'all' || scenario(p).verdict === state.verdict)
+    && (state.scope === 'all' || (state.scope === 'watchlist' ? p.watchlist
       : state.scope === 'documented' ? p.research?.status === 'route' : p.tvl_usd < radar.floor_usd))
-    && (!query || `${p.name} ${p.slug} ${p.category} ${p.chains.join(' ')}`.toLowerCase().includes(query))
-    && (!state.category || p.category === state.category)
-    && (!state.chain || p.chains.includes(state.chain))
+    && (!q || `${p.name} ${p.slug} ${p.category} ${p.chains.join(' ')}`.toLowerCase().includes(q))
+    && (!state.category || p.category === state.category) && (!state.chain || p.chains.includes(state.chain))
     && (!state.review || p.review_required))
-    .sort((a, b) => {
-      const av = a[state.sort], bv = b[state.sort];
-      if (av === null || bv === null) return av === bv ? a.rank - b.rank : av === null ? 1 : -1;
-      const difference = typeof av === 'string' ? byText(av, bv) : av - bv;
-      return difference * state.direction || a.rank - b.rank;
-    });
+    .map(p => ({ p, e: scenario(p) }))
+    .sort((a, b) => value(a.p) === null
+      ? cmp(a.p.name, b.p.name) * state.dir * -1 || a.p.rank - b.p.rank
+      : (value(a.p) - value(b.p)) * state.dir || a.p.rank - b.p.rank);
 }
-
-function renderBoard() {
-  const rows = filteredRows();
-  state.page = Math.min(state.page, Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1));
-  const start = state.page * PAGE_SIZE;
-  $('board-body').innerHTML = rows.slice(start, start + PAGE_SIZE).map(p => {
-    const changeClass = p.change_7d === null ? 'neutral' : p.change_7d >= 0 ? 'positive' : 'negative';
-    const caution = p.plan.label === 'Research only' || p.review_required;
-    return `<tr><td class="rank">${String(p.rank).padStart(2, '0')}</td><td><button class="protocol-button" data-detail="${escape(p.slug)}" aria-label="Inspect ${escape(p.name)}">${protocolIcon(p)}<span><strong>${escape(p.name)}</strong><small>${escape(p.category ?? 'Unclassified')}${p.watchlist ? ' · watchlist' : ''}</small></span></button></td>
-      <td class="numeric value-cell"><strong>${money(p.implied_value_usd)}</strong><small>${money(p.low_value_usd)} – ${money(p.high_value_usd)}</small></td>
-      <td class="numeric">${money(p.tvl_usd)}</td><td class="numeric ${changeClass}">${pct(p.change_7d)}</td>
-      <td><span class="route${caution ? ' caution' : ''}">${escape(signalLabel(p))}</span></td>
-      <td><button class="row-arrow" data-detail="${escape(p.slug)}" aria-label="Open ${escape(p.name)} fieldnote">↗</button></td></tr>`;
-  }).join('');
-  $('empty').hidden = rows.length !== 0;
-  $('board-table').hidden = rows.length === 0;
-  $('result-count').textContent = `${rows.length} of ${radar.rows.length} protocols`;
-  $('page-info').textContent = rows.length ? `${start + 1}–${Math.min(start + PAGE_SIZE, rows.length)} of ${rows.length} · ranks stay tied to model value` : 'No matching protocols';
-  $('previous').disabled = state.page === 0;
-  $('next').disabled = start + PAGE_SIZE >= rows.length;
-  document.querySelectorAll('[data-sort]').forEach(button => {
-    const active = button.dataset.sort === state.sort;
-    button.querySelector('span').textContent = active ? (state.direction < 0 ? '↓' : '↑') : '↕';
-    const th = button.closest('th');
-    if (active) th.setAttribute('aria-sort', state.direction < 0 ? 'descending' : 'ascending');
-    else th.removeAttribute('aria-sort');
+/** The page proves itself: its own rows, hashed here, must equal the board the entry submitted. */
+async function verify() {
+  const board = window.FIELDNOTE_BOARD;
+  if (!board || !window.crypto?.subtle) return { ok: null };
+  const text = radar.rows.map(r => `${r.slug}:${r.implied_value_usd}`).join('\n');
+  const mine = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const ranks = radar.rows.every((r, i) => r.rank === i + 1);
+  const ordered = radar.rows.every((r, i) => i === 0 || radar.rows[i - 1].implied_value_usd >= r.implied_value_usd);
+  const covered = radar.rows.filter(r => r.watchlist).length === radar.watchlist_size;
+  return { ok: mine === board.digest && ranks && ordered && covered && radar.rows.length === board.rows,
+    rows: board.rows, total: board.total_usd, mine, theirs: board.digest };
+}
+function kpis() {
+  const v = radar.model.validation, o = radar.odds_check, b = radar.best_per_hour;
+  const tiles = [
+    ['RANKED', int(radar.rows.length), `${int(radar.universe_size)} records read in all`, ''],
+    ['IF IT LAUNCHES', money(radar.board_value_usd), `odds-weighted ${money(radar.board_odds_value_usd)}`, 'hi'],
+    ['VALUE MISS, HELD OUT', `×${v.typical_factor.toFixed(2)}`, `flat TVL multiple ×${v.flat_factor.toFixed(2)}`, v.typical_factor < v.flat_factor ? 'hi' : 'warn'],
+    ['ODDS CALLED RIGHT', `${(o.hit_rate * 100).toFixed(0)}%`, `base rate ${(o.base_hit * 100).toFixed(0)}% · Brier ${o.brier.toFixed(3)} vs ${o.base_brier.toFixed(3)}`, 'hi'],
+    ['WORTH FARMING', `${radar.verdicts.farm}<u> farm</u>`, `${radar.verdicts.marginal} marginal · ${radar.verdicts.skip} skip`, radar.verdicts.farm ? 'hi' : 'warn'],
+    ['BEST PER HOUR', b ? `$${b.per_hour.toFixed(0)}<u>/h</u>` : '—', b ? `${esc(b.name)} · net ${cash(b.net)} · ${b.hours.toFixed(1)}h` : '', ''],
+  ];
+  $('kpis').innerHTML = tiles.map(([l, val, foot, cls]) => `<div class="kpi ${cls}"><small>${l}<span aria-hidden="true">◦</span></small><strong>${val}</strong><em>${foot}</em></div>`).join('');
+  $('n-farm').textContent = radar.verdicts.farm; $('n-marginal').textContent = radar.verdicts.marginal; $('n-skip').textContent = radar.verdicts.skip;
+  $('nav-count').textContent = radar.rows.length;
+  $('caption').textContent = `${radar.rows.length} record no token and pass the screens`;
+  $('coverage').textContent = `${radar.watchlist_size}/${radar.watchlist_size} watchlist · ${radar.version} · ${radar.bootstrap_rounds} refits`;
+  $('side-date').textContent = radar.as_of; $('top-date').textContent = radar.as_of;
+}
+const TONES = ['#2f6b45', '#6f9a52', '#c2b45c', '#b98a4a', '#9c6f54', '#7d6a7f', '#5f7c86', '#8aa07b', '#c5cbb0'];
+function ledgerStrip() {
+  const entries = Object.entries(radar.ledger_groups), total = radar.ledger_total;
+  $('ledger-total').textContent = `${int(total)} protocols · ${entries.length} groups`;
+  $('ledger-bar').innerHTML = entries.map(([g, n], i) => `<i style="width:${n / total * 100}%;background:${TONES[i % TONES.length]}" title="${esc(g)}: ${n}"></i>`).join('');
+  $('ledger-legend').innerHTML = entries.map(([g, n], i) => `<span><b style="color:${TONES[i % TONES.length]}">■</b> <b>${esc(g)}</b> ${n}</span>`).join('');
+  $('ledger-chips').innerHTML = entries.map(([g, n]) => `<span>${esc(g)} · ${n}</span>`).join('');
+  $('ledger-status').innerHTML = '<option value="">Every group</option>' + entries.map(([g, n]) => `<option value="${esc(g)}">${esc(g)} (${n})</option>`).join('');
+}
+function strip() {
+  const v = radar.model.validation, o = radar.odds_check;
+  $('strip').innerHTML = [
+    proof === null ? '<b>…</b> checking this page against the submitted board'
+      : proof.ok === null ? '<b>·</b> no digest available offline'
+      : proof.ok ? `<b>✓</b> this table = board.json (${proof.rows} rows, digest ${proof.mine.slice(0, 12)})`
+      : `<b>!</b> differs from board.json (${String(proof.mine).slice(0, 12)} vs ${String(proof.theirs).slice(0, 12)})`,
+    proof?.ok ? '<b>✓</b> ranks 1 to N in order, values never rise' : '',
+    proof?.ok ? `<b>✓</b> total ${money(radar.board_value_usd)} of ${money(proof.total)}` : '',
+    proof?.ok ? `<b>✓</b> watchlist ${radar.watchlist_size} of ${radar.watchlist_size} ranked` : '',
+    `<b>✓</b> ${radar.ledger_total} of ${int(radar.universe_size)} protocols in one group each`,
+    `<b>✓</b> value by ${v.folds}-fold, leave-one-out and walk-forward`,
+    `<b>✓</b> odds called right ${(o.hit_rate * 100).toFixed(0)}% against ${(o.base_hit * 100).toFixed(0)}% base`,
+  ].filter(Boolean).join('');
+}
+function guide() {
+  const b = radar.best_per_hour, e = radar.summary_economics;
+  $('guide').innerHTML = `<p class="eyebrow">READ TWO NUMBERS</p><h3>Value is not odds.<br>Odds are not a plan.</h3>
+    <div class="pair"><div><strong>×${radar.model.validation.typical_factor.toFixed(2)}</strong><span>value miss</span></div><div><strong>${(radar.odds_check.hit_rate * 100).toFixed(0)}%</strong><span>odds called right</span></div></div>
+    <p>${cash(e.deposit)} for ${e.horizon_weeks} weeks at a ${(e.drop_share * 100).toFixed(0)}% drop share, less two withdrawals and every transaction, against a ${(e.tbill_apr * 100).toFixed(0)}% T-bill.</p>
+    <hr><strong>Verdicts</strong><ol><li>Farm: clears fees and the benchmark, ${cash(e.min_per_hour)} an hour.</li><li>Marginal: clears fees only.</li><li>Skip: fees or risk win.</li></ol>
+    ${b ? `<p class="note">Best on the board: ${esc(b.name)}, ${cash(b.net)} net in ${b.hours.toFixed(1)} hands-on hours.</p>` : ''}
+    <p class="note">Rewards are unverified and capital can be lost.</p>`;
+}
+const icon = p => {
+  const hue = [106, 40, 168, 22, 70, 210][[...p.slug].reduce((n, c) => n + c.charCodeAt(0), 0) % 6];
+  return `<span class="ico" style="--icon-bg:hsl(${hue} 24% 91%);--icon-ink:hsl(${hue} 24% 32%)" aria-hidden="true">${esc(p.name[0])}</span>`;
+};
+function board() {
+  const rows = rowsFor(), max = Math.max(...radar.rows.map(r => r.implied_value_usd));
+  state.page = Math.min(state.page, Math.max(0, Math.ceil(rows.length / PAGE) - 1));
+  const start = state.page * PAGE;
+  $('body').innerHTML = rows.slice(start, start + PAGE).map(({ p, e }) => `<tr><td class="id">${String(p.rank).padStart(3, '0')}</td>
+      <td><span class="who"><button data-open="${esc(p.slug)}" aria-label="Open ${esc(p.name)}">${icon(p)}<span><strong>${esc(p.name)}</strong><small>${esc(p.category ?? 'Unclassified')}${p.watchlist ? ' · watchlist' : ''}${p.review_required ? ' · flag' : ''}</small></span></button></span></td>
+      <td class="num val"><strong>${money(p.implied_value_usd)}</strong><small>${money(p.p25_usd)}–${money(p.p75_usd)}</small><span class="sbar" style="width:${Math.max(3, p.implied_value_usd / max * 42)}px" aria-hidden="true"></span></td>
+      <td class="num"><strong>${(p.launch_odds * 100).toFixed(0)}%</strong><small>${p.rank_low === null ? '' : `rank ${p.rank_low}–${p.rank_high}`}</small></td>
+      <td class="num">${money(p.tvl_usd)}</td><td class="num ${p.change_7d === null ? 'muted' : p.change_7d >= 0 ? 'pos' : 'neg'}">${pct(p.change_7d)}</td>
+      <td><span class="tag ${e.verdict}">${e.verdict.toUpperCase()}</span><span class="net">${cash(e.net)}</span><span class="hrs">${e.tradeable ? `$${e.per_hour.toFixed(0)}/h · fees ${cash(e.fees)}` : 'no funded route'}</span></td>
+      <td><span class="tag ${e.verdict === 'skip' ? 'skip' : 'farm'}">${esc(p.plan.label)}</span></td>
+      <td><button class="id" data-open="${esc(p.slug)}" aria-label="Open ${esc(p.name)}">↗</button></td></tr>`).join('');
+  $('empty').hidden = rows.length > 0; $('board').hidden = rows.length === 0;
+  $('count').textContent = `${rows.length} of ${radar.rows.length} shown`;
+  $('page-info').textContent = rows.length ? `${start + 1}–${Math.min(start + PAGE, rows.length)} of ${rows.length}` : 'nothing matches';
+  $('prev').disabled = state.page === 0; $('next').disabled = start + PAGE >= rows.length;
+  document.querySelectorAll('[data-sort]').forEach(b => {
+    const on = b.dataset.sort === state.sort;
+    b.querySelector('span').textContent = on ? (state.dir < 0 ? '↓' : '↑') : '↕';
+    if (on) b.closest('th').setAttribute('aria-sort', state.dir < 0 ? 'descending' : 'ascending');
+    else b.closest('th').removeAttribute('aria-sort');
   });
 }
-
-function signalLabel(p) {
-  return { route: 'Route documented', identity: 'Identity conflict', product: 'Product token exists',
-    access: 'Access / exit check' }[p.research?.status] ?? 'Snapshot only';
+function ledger() {
+  const q = state.ledgerSearch.trim().toLowerCase();
+  const rows = radar.ledger.filter(l => (!state.ledgerGroup || l.group === state.ledgerGroup)
+    && (!q || `${l.name} ${l.slug} ${l.category} ${l.group}`.toLowerCase().includes(q)));
+  state.ledgerPage = Math.min(state.ledgerPage, Math.max(0, Math.ceil(rows.length / LEDGER_PAGE) - 1));
+  const start = state.ledgerPage * LEDGER_PAGE;
+  $('ledger-body').innerHTML = rows.slice(start, start + LEDGER_PAGE).map(l => `<tr><td><b>${esc(l.name)}</b><i>${esc(l.category ?? 'Unclassified')}</i></td>
+    <td><span class="tag ${l.group === 'Ranked here' ? 'farm' : l.group === 'Token trades' ? 'marginal' : 'skip'}">${esc(l.group)}</span></td>
+    <td class="muted">${esc(l.record)}${l.group === 'Ranked here' ? ' · ranked on the board' : ''}</td><td class="num">${money(l.tvl_usd)}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">No protocol in this group.</td></tr>';
+  $('ledger-info').textContent = `${rows.length ? start + 1 : 0}–${Math.min(start + LEDGER_PAGE, rows.length)} of ${rows.length}`;
+  $('ledger-prev').disabled = start === 0; $('ledger-next').disabled = start + LEDGER_PAGE >= rows.length;
 }
-
-function renderOverview() {
-  const rows = radar.rows;
-  const xMin = Math.floor(Math.log10(Math.min(...rows.map(p => p.tvl_usd))));
-  const xMax = Math.ceil(Math.log10(Math.max(...rows.map(p => p.tvl_usd))));
-  const yMin = Math.floor(Math.log10(Math.min(...rows.map(p => p.implied_value_usd))));
-  const yMax = Math.ceil(Math.log10(Math.max(...rows.map(p => p.implied_value_usd))));
-  const x = n => 53 + (Math.log10(n) - xMin) / (xMax - xMin) * 537;
-  const y = n => 151 - (Math.log10(n) - yMin) / (yMax - yMin) * 126;
-  let grid = '';
-  for (let i = xMin; i <= xMax; i++) grid += `<line x1="${x(10 ** i)}" x2="${x(10 ** i)}" y1="25" y2="151"/><text x="${x(10 ** i)}" y="171" text-anchor="middle">${money(10 ** i)}</text>`;
-  for (let i = yMin; i <= yMax; i++) grid += `<line x1="53" x2="590" y1="${y(10 ** i)}" y2="${y(10 ** i)}"/><text x="44" y="${y(10 ** i) + 3}" text-anchor="end">${money(10 ** i)}</text>`;
-  const color = p => ['identity', 'product'].includes(p.research?.status) ? '#e8aa79'
-    : p.research?.status === 'route' ? '#d5ed9f' : '#7ba795';
-  const points = [...rows].reverse().map(p => `<a href="#detail=${encodeURIComponent(p.slug)}" aria-label="${escape(p.name)}: TVL ${money(p.tvl_usd)}, conditional value ${money(p.implied_value_usd)}"><circle cx="${x(p.tvl_usd).toFixed(1)}" cy="${y(p.implied_value_usd).toFixed(1)}" r="${p.research ? 4.5 : 2.7}" fill="${color(p)}" opacity="${p.research ? 1 : 0.6}"><title>${escape(p.name)} · ${signalLabel(p)}</title></circle></a>`).join('');
-  $('market-map').innerHTML = `<svg viewBox="0 0 630 191" role="img" aria-label="All ${rows.length} candidates by recorded TVL and conditional implied value, both log scaled"><g class="chart-grid">${grid}</g>${points}<text x="320" y="190" class="axis-title" text-anchor="middle">RECORDED TVL →</text><text x="54" y="12" class="axis-title">CONDITIONAL VALUE ↑</text></svg><div class="chart-legend"><span><i></i>Snapshot candidate</span><span><i class="documented"></i>Route documented</span><span><i class="conflict"></i>Identity / product caution</span></div>`;
-  const reviewed = rows.filter(p => p.research).length;
-  const routes = rows.filter(p => p.research?.status === 'route').length;
-  $('research-brief').innerHTML = `<div class="brief-number">${reviewed}<span>records reviewed against official docs<br>${routes} documented product routes · ${rows.length - reviewed} not reviewed</span></div>
-    <button data-open="bittensor-dtao"><b>01</b><span><strong>dTAO is not tokenless.</strong><small>TAO and subnet alpha already exist.</small></span><span>↗</span></button>
-    <button data-open="onre"><b>02</b><span><strong>Buying is not redeeming.</strong><small>ONyc primary exits need verified access.</small></span><span>↗</span></button>
-    <p>Docs checked ${RESEARCH_DATE}. No contract state or reward eligibility verified.</p>`;
-  const v = radar.model.validation;
-  $('insight-panel').innerHTML = `<p class="eyebrow">ANALYST'S MARGIN NOTE</p><h3>Not every missing ticker is an opportunity.</h3><p>Rank reflects conditional value—not launch likelihood or farming profitability. Review flags stay visible, even on the house watchlist.</p>
-    <div class="validation-pair"><div><strong>×${v.typical_factor.toFixed(2)}</strong><span>Model error</span></div><div><strong>×${v.baseline_factor.toFixed(2)}</strong><span>Simple baseline</span></div></div><p>5-fold held-out multiplicative error. Lower is better; neither number is precise enough for an investment decision.</p>
-    <button class="text-button" data-method>Inspect the methodology ↗</button><hr><p class="eyebrow">READ EACH FIELDNOTE</p><ol><li>Check the token identity.</li><li>Inspect the nearest peers.</li><li>Cost the route and the exit.</li></ol><p class="note">Documentation ≠ security approval.<br>All token rewards remain unverified.</p>`;
-}
-
-function reset() {
-  Object.assign(state, { scope: 'all', search: '', category: '', chain: '', review: false, page: 0 });
-  $('search').value = ''; $('category').value = ''; $('chain').value = ''; $('review-filter').checked = false;
-  scopeButtons();
-  renderBoard();
-}
-
-function scopeButtons() {
-  document.querySelectorAll('[data-scope]').forEach(button => {
-    const active = button.dataset.scope === state.scope;
-    button.classList.toggle('selected', active);
-    button.setAttribute('aria-pressed', String(active));
-  });
-}
-
-function renderLedger() {
-  const counts = ['candidate', 'recorded', 'excluded'].map(status => radar.ledger.filter(p => p.status === status).length);
-  $('ledger-summary').innerHTML = [['Universe records', radar.universe_size], ['Research candidates', counts[0]],
-    ['Token / market-cap recorded', counts[1]], ['Excluded exposure', counts[2]]]
-    .map(([label, value]) => `<div><strong>${integer(value)}</strong><span>${escape(label)}</span></div>`).join('');
-  const query = state.ledgerSearch.trim().toLowerCase();
-  const rows = radar.ledger.filter(p => (!state.ledgerStatus || state.ledgerStatus === p.status)
-    && (!query || `${p.name} ${p.slug} ${p.category} ${p.reason}`.toLowerCase().includes(query)));
-  state.ledgerPage = Math.min(state.ledgerPage, Math.max(0, Math.ceil(rows.length / LEDGER_PAGE_SIZE) - 1));
-  const start = state.ledgerPage * LEDGER_PAGE_SIZE;
-  $('ledger-body').innerHTML = rows.slice(start, start + LEDGER_PAGE_SIZE).map(p => `<tr><td>${escape(p.name)}<br><small class="neutral">${escape(p.category)}</small></td><td><span class="route${p.status === 'excluded' ? ' caution' : ''}">${p.status === 'recorded' ? 'Token recorded' : p.status === 'candidate' ? 'Candidate' : 'Excluded exposure'}</span></td><td>${escape(p.reason)}${p.status === 'recorded' ? `<br>Recorded market cap: ${money(p.mcap_usd)} · not a launch estimate` : ''}</td><td class="numeric">${money(p.tvl_usd)}</td></tr>`).join('')
-    || '<tr><td colspan="4">No records match this search.</td></tr>';
-  $('ledger-info').textContent = `${rows.length ? start + 1 : 0}–${Math.min(start + LEDGER_PAGE_SIZE, rows.length)} of ${rows.length}`;
-  $('ledger-previous').disabled = start === 0;
-  $('ledger-next').disabled = start + LEDGER_PAGE_SIZE >= rows.length;
-}
-
-function renderModel() {
-  const m = radar.model, v = m.validation;
-  const b = m.coefficients;
-  $('model-content').innerHTML = `<div class="model-grid">
-    <article class="model-card full"><p class="eyebrow">REPRODUCIBLE MODEL</p><h3>Conditional market cap, not a price.</h3><div class="formula">log(value) = ${b[0].toFixed(4)} + ${b[1].toFixed(4)}·log(TVL/$100M)
-+ ${b[2].toFixed(4)}·log(1+growth/100) + ${b[3].toFixed(4)}·log(1+days/365) + category offset</div>
-    <p>Growth clip −60%…120%, missing = 0. Unknown tracking age = 365 days, not launch age. Ridge ${m.ridge}; unpenalized intercept. Category residuals shrink with ${m.category_prior} prior observations, clip ±1.5. No names or launch guesses.</p></article>
-    <article class="model-card"><p class="eyebrow">Held-out, not fitted-in-sample</p><h3>Error, not certainty.</h3><div class="validation-pair"><div><strong>×${v.typical_factor.toFixed(2)}</strong><span>Model error</span></div><div><strong>×${v.baseline_factor.toFixed(2)}</strong><span>TVL baseline</span></div></div><p>5 folds by sorted slug. Fit model, offsets and median-MC/TVL baseline on training folds only; metric exp(mean absolute log error).</p><p class="warning">Bands: held-out residual P10–P90, expanded to include base. They are not a confidence interval or a future-token validation.</p></article>
-    <article class="model-card"><p class="eyebrow">${m.peer_count} PEERS</p><h3>Inspect the context.</h3><p>Require token ID/symbol, positive market cap, MC/TVL 0.001–100; exclude CEX. Explanatory neighbors prioritize category, then related business family, then log-TVL distance plus 0.4 with no shared chain. They do not refit the model.</p><p>Flag &lt;3 category peers or TVL outside ${money(m.min_tvl)}–${money(m.max_tvl)}. Token rights and collateral overlap remain unmodeled.</p></article>
-    <article class="model-card"><p class="eyebrow">TWO EVIDENCE LANES</p><h3>Keep contradictions visible.</h3><p>All ${radar.watchlist_size} watchlist rows retained, including identity conflicts. Parent metadata is missing. Docs checked ${RESEARCH_DATE} never change snapshot valuations; unreviewed workflows remain labeled. No security or reward eligibility is verified.</p></article>
-    <article class="model-card"><p class="eyebrow">COST THE EXIT</p><h3>Principal is not a fee.</h3><p>Pilot budgets separate principal, gas and 5% APR opportunity cost. Break-even covers gas + opportunity only, excluding slippage, bridging, protocol fees and losses. Review horizons are not eligibility rules. Identity/access conflicts use $0 live capital.</p></article>
-    <article class="model-card full"><p>${escape(radar.source)} · ${escape(radar.as_of)}. No live prices, APIs or remote assets. Browser and entrypoint use the same engine and static research dataset.</p></article>
+function model() {
+  const v = radar.model.validation, o = radar.odds_check, b = radar.model.coefficients, e = radar.summary_economics, ab = v.ablation;
+  $('model-content').innerHTML = `<div class="grid2">
+    <article class="mcard full"><p class="eyebrow">WHAT THE NUMBER MEANS</p><h3>An if-it-launches value. Never a price.</h3>
+      <div class="formula">log(value) = ${b[0].toFixed(4)} + ${b[1].toFixed(4)}·log(TVL/$100M) + ${b[2].toFixed(4)}·log(1+growth/100) + ${b[3].toFixed(4)}·log(1+years)</div>
+      <p>Growth clips to −60%…+120%, missing growth is 0, missing tracking age is 365 days, and days tracked is not launch age. Ridge ${radar.model.ridge}, unpenalised intercept; category residual means shrink with ${radar.model.category_prior} priors and clip at ±1.5 log units. No protocol name, document or launch guess enters the fit.</p></article>
+    <article class="mcard"><p class="eyebrow">ONE TERM AT A TIME</p><h3>Miss on protocols left out.</h3>
+      <div class="formula">flat TVL multiple    ×${ab.base_flat.toFixed(2)}
++ size curve (TVL^b) ×${ab.size_curve.toFixed(2)}
++ category offset    ×${ab.size_and_category.toFixed(2)}
++ growth and age     ×${ab.size_category_momentum_age.toFixed(2)}</div>
+      <p>Each line refits with one more term, leaving one protocol out at a time. Walk-forward refits only on protocols DefiLlama began tracking earlier, so a later one is never priced by itself. ${v.leave_one_out.toFixed(2)} leave-one-out and ${v.walk_forward.toFixed(2)} walk-forward disagree, so the headline is the pooled ×${v.typical_factor.toFixed(2)}.</p>
+      <p>${radar.bootstrap_rounds} bootstrap refits of the ${radar.model.peer_count} comparables give every row its band and rank span; ${(v.range_holds.p25_p75 * 100).toFixed(0)}% of held-out misses land inside P25–P75 and ${(v.range_holds.p10_p90 * 100).toFixed(0)}% inside P10–P90. Model-error bands, not a confidence interval.</p></article>
+    <article class="mcard"><p class="eyebrow">THE SECOND MODEL</p><h3>How likely a token arrives.</h3>
+      <div class="pair"><div><strong>${(o.hit_rate * 100).toFixed(0)}%</strong><span>called right, ${o.n} protocols</span></div><div><strong>${(o.base_hit * 100).toFixed(0)}%</strong><span>base rate alone</span></div></div>
+      <p>A ridge logistic over log size, years tracked, years squared and business family, fit on ${o.n} protocols (${o.positives} record a token) and scored five-fold. Brier ${o.brier.toFixed(3)} against ${o.base_brier.toFixed(3)} for the base rate: a ${(o.lift_calls * 100).toFixed(0)}-point lift.</p>
+      <p class="warn">Called right is classification, not calibration. A 70% row is not every-other-time reliable, and the snapshot cannot see private plans.</p></article>
+    <article class="mcard"><p class="eyebrow">COST BEFORE UPSIDE</p><h3>Principal is not a fee.</h3>
+      <p>${cash(e.deposit)} for ${e.horizon_weeks} weeks at a ${(e.drop_share * 100).toFixed(0)}% drop share. The drop is the modelled value times the deposit's share of TVL times the odds. Fees are two withdrawals at $1.00 plus a transaction a fortnight and three setup transactions: Ethereum $3.00, most chains $0.05, the cheapest $0.01. Hands-on time is 2.6 hours plus 15 minutes a week.</p>
+      <p>Farm clears the fees and a ${(e.tbill_apr * 100).toFixed(0)}% T-bill on the same money at ${cash(e.min_per_hour)} an hour. Marginal clears fees only. Bridging, slippage, protocol fees and losses are excluded.</p></article>
   </div>`;
 }
-
-function openDetail(slug, tab = 'evidence') {
-  const p = radar.rows.find(row => row.slug === slug);
+function detail(slug, tab = state.tab) {
+  const p = radar.rows.find(r => r.slug === slug);
   if (!p) return;
-  activeProtocol = p; detailTab = tab; pilotBudget = 100;
-  renderDetail();
+  state.open = slug; state.tab = tab;
+  const e = scenario(p), plan = p.plan, f = p.factors, v = radar.model.validation;
+  const evidence = `<h3>How this figure is made</h3>
+    <p class="note">Five live-token neighbours below carry the market's own capitalisation. Another sector is marked: similar size is not similar economics.</p>
+    <div class="peer"><table><thead><tr><th>LIVE-TOKEN PEER</th><th class="num">TVL</th><th class="num">MARKET CAP</th><th class="num">CAP/TVL</th><th>MATCH</th></tr></thead>
+      <tbody>${p.peers.map(q => `<tr><td><b>${esc(q.name)}</b><i>${esc(q.category)}</i></td><td class="num">${money(q.tvl_usd)}</td><td class="num">${money(q.mcap_usd)}</td><td class="num">${q.multiple.toFixed(2)}×</td><td><span class="tag ${q.same_category ? 'farm' : 'marginal'}">${q.same_category ? 'Same sector' : q.same_family ? 'Related family' : 'Other sector'}</span></td></tr>`).join('')}</tbody></table></div>
+    <div class="facts">${[['REFERENCE', money(f.intercept_usd)], ['TVL', `×${f.tvl.toFixed(3)}`], ['GROWTH', `×${f.growth.toFixed(3)}`], ['AGE', `×${f.age.toFixed(3)}`], ['SECTOR', `×${f.category.toFixed(3)}`]].map(([k, val]) => `<div><small>${k}</small><b>${val}</b></div>`).join('')}</div>
+    <p class="note">Reference × the four terms gives the base estimate before rounding. ${money(p.p25_usd)}–${money(p.p75_usd)} is the middle half of ${radar.bootstrap_rounds} refits, ranking it ${p.rank_low}–${p.rank_high} across them. The pooled held-out miss is ×${v.typical_factor.toFixed(2)}, so read the band as a wide hint.</p>
+    <h3 style="margin-top:16px">The odds, unpacked</h3>
+    <p class="note">The ${(p.launch_odds * 100).toFixed(0)}% comes from this protocol's size, the ${p.age_days === null ? 'unknown (365 days assumed)' : int(p.age_days) + ' days'} DefiLlama has tracked it and its business family. Across the ${radar.odds_check.n} protocols the board reads, the model calls ${(radar.odds_check.hit_rate * 100).toFixed(0)}% right against a ${(radar.odds_check.base_hit * 100).toFixed(0)}% base rate.</p>`;
+  const farm = `<h3>${esc(plan.label)} · ${esc(plan.chain)}</h3>
+    <div class="econ"><div><small>MODELLED DROP</small><b>${cash(e.dropped)}</b></div><div><small>FEES</small><b>${cash(e.fees)}</b></div><div><small>NET</small><b>${cash(e.net)}</b></div><div><small>PER HOUR</small><b>${e.tradeable ? '$' + e.per_hour.toFixed(1) : '—'}</b></div></div>
+    <p class="note"><span class="tag ${e.verdict}">${e.verdict.toUpperCase()}</span> — ${esc(WHY[e.verdict])}. The same ${cash(e.deposit)} in a ${(e.tbill_apr * 100).toFixed(0)}% T-bill over ${e.horizon_weeks} weeks returns ${cash(e.tbill)}. The drop assumes a ${(e.drop_share * 100).toFixed(0)}% share of ${money(p.implied_value_usd)} at ${(p.launch_odds * 100).toFixed(0)}% odds${e.fee_break_even_share === null ? '' : `, and fees are covered while the drop share stays above ${(e.fee_break_even_share * 100).toFixed(2)}%`}${e.odds_break_even === null ? '' : `, or the odds stay above ${(e.odds_break_even * 100).toFixed(1)}% at a ${(e.drop_share * 100).toFixed(0)}% share`}. ${e.hours.toFixed(1)} hands-on hours; bridging, slippage, protocol fees and losses excluded.</p>
+    <ol class="steps">${plan.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`;
+    $('dlg').innerHTML = `<div class="d-head"><div><h2 id="d-name">${esc(p.name)}</h2><p class="d-sub">${esc(p.category ?? 'Unclassified')} · ${esc(plan.chain)} · ${p.watchlist ? 'house watchlist' : 'extended set'}</p></div><span class="d-rank">RANK ${String(p.rank).padStart(3, '0')} · ${radar.version}</span></div>
+    <div class="d-kpi"><div><small>IF A TOKEN LAUNCHES</small><strong>${money(p.implied_value_usd)}</strong><em>middle half ${money(p.p25_usd)}–${money(p.p75_usd)} · rank ${p.rank_low}–${p.rank_high} over ${radar.bootstrap_rounds} refits</em></div>
+      <div><small>LAUNCH ODDS</small><strong>${(p.launch_odds * 100).toFixed(0)}%</strong><em>called right ${(radar.odds_check.hit_rate * 100).toFixed(0)}% of the time</em></div>
+      <div><small>SNAPSHOT TVL</small><strong>${money(p.tvl_usd)}</strong><em>${pct(p.change_7d)} over seven days</em></div>
+      <div><small>TIME TRACKED</small><strong>${p.age_days === null ? '—' : int(p.age_days)}</strong><em>days, not launch age</em></div></div>
+    <div class="d-cols"><section>
+      <div class="tabs" role="group" aria-label="Fieldnote section">${[['evidence', 'Valuation and odds'], ['farm', 'Farm and exit']].map(([k, l]) => `<button data-tab="${k}" aria-pressed="${state.tab === k}" class="${state.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div>${state.tab === 'farm' ? farm : evidence}</div></section>
+      <aside class="side-note2"><p class="eyebrow">${p.review_required ? 'REVIEW FLAG' : 'NO FLAG RAISED'}</p>
+        <h3>${esc(p.research?.title ?? 'The route is still a hypothesis.')}</h3>
+        <p>${esc(p.research?.summary ?? 'No protocol-specific documentation has been reviewed. The model can rank this record, but the snapshot cannot verify its app, assets or reward rules.')}</p>
+        <div class="stop"><b>STOP CONDITION</b><p class="note">${esc(plan.stop)}</p></div>
+        <p class="eyebrow">STILL TO CHECK</p><ul>${[...p.review_reasons, 'Reward and token allocation unverified'].map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+        ${p.research ? `<p class="eyebrow">SOURCES, CHECKED ${RESEARCH_DATE}</p><ul>${p.research.sources.map(([t, u]) => `<li><b>${esc(t)}</b><br><code>${esc(u)}</code></li>`).join('')}</ul>` : ''}
+        <p class="note">Snapshot ${radar.as_of}. A documented product can still have no confirmed token or reward programme. Never a trade recommendation.</p></aside></div>`;
   if (!$('detail').open) $('detail').showModal();
 }
-
-function renderDetail() {
-  const p = activeProtocol;
-  const plan = farmPlan(p, p.age_days, pilotBudget);
-  const f = p.factors;
-  const notes = p.research;
-  const evidence = `<h3>The comparison behind the estimate</h3><p class="note">Actual market caps of five training-set neighbors. ${p.category_peers} same-category peers in the full fit. Another category is explicitly marked; similar TVL is not identical economics.</p>
-    <div class="table-wrap peer-wrap"><table><thead><tr><th>LIVE-TOKEN PEER</th><th class="numeric">TVL</th><th class="numeric">MARKET CAP</th><th class="numeric">MC/TVL</th><th>MATCH</th></tr></thead><tbody>${p.peers.map(peer => `<tr><td><strong>${escape(peer.name)}</strong><small>${escape(peer.category)}</small></td><td class="numeric">${money(peer.tvl_usd)}</td><td class="numeric">${money(peer.mcap_usd)}</td><td class="numeric">${peer.multiple.toFixed(2)}×</td><td><span class="route${peer.same_category ? '' : ' caution'}">${peer.same_category ? 'Same category' : peer.same_family ? 'Related family' : 'Other category'}</span></td></tr>`).join('')}</tbody></table></div>
-    <h3 class="spaced-heading">Recover the number</h3><div class="factor-strip">${[['Reference', money(f.intercept_usd)], ['TVL', f.tvl], ['Growth', f.growth], ['Age', f.age], ['Category', f.category]].map(([label, n]) => `<div><small>${label}</small><strong>${typeof n === 'number' ? '×' + n.toFixed(3) : n}</strong></div>`).join('')}</div><p class="note">Reference × four factors = base estimate before rounding. Bands reflect peer errors, not token-launch probabilities.</p>`;
-  const costs = plan.capital_usd ? `<div class="cost-grid"><div><small>AT-RISK PRINCIPAL</small><strong>$${plan.capital_usd}</strong></div><div><small>ROUND-TRIP GAS</small><strong>$${plan.gas_low}–$${plan.gas_high}</strong></div><div><small>OPPORTUNITY COST</small><strong>$${plan.opportunity_usd.toFixed(2)}</strong></div></div><p class="note">Illustrative reward needed to cover gas + opportunity cost: <b>$${(plan.gas_low + plan.opportunity_usd).toFixed(2)}–$${(plan.gas_high + plan.opportunity_usd).toFixed(2)}</b>. Not a payout prediction. Excludes bridging, slippage, protocol fees and capital losses. ${plan.duration_days} days at assumed 5% APR.</p>` : '<p class="warning">Live-capital budget: $0. Resolve identity or access questions before any funded experiment.</p>';
-  const farm = `<div class="plan-heading"><h3>${escape(plan.label)} · ${escape(plan.chain)}</h3><label>Pilot scenario <select id="pilot-budget" ${plan.capital_usd ? '' : 'disabled'}>${[50, 100, 500].map(n => `<option value="${n}" ${n === pilotBudget ? 'selected' : ''}>$${n}</option>`).join('')}</select></label></div>${costs}<ol class="plan-list">${plan.steps.map(step => `<li>${escape(step)}</li>`).join('')}</ol>`;
-  const sources = notes ? `<h3>Official documentation reviewed</h3><p class="note">Checked ${RESEARCH_DATE}, after the ${radar.as_of} snapshot. These notes do not change the ranking and do not verify current onchain state.</p>${notes.sources.map(([title, url]) => `<article class="source-card"><strong>${escape(title)}</strong><code>${escape(url)}</code><span>Primary source · URL shown as text to preserve offline operation</span></article>`).join('')}<p class="warning">The documented product can exist without a separately confirmed governance token or reward program. Documentation is not a security endorsement.</p>` : `<h3>No protocol-specific source review yet.</h3><p>This workflow is derived from ${escape(p.category)} and snapshot data only. It is not verified app guidance; confirm official documentation and supported routes before action.</p>`;
-  $('detail-content').innerHTML = `<div class="detail-heading"><div><h2 id="detail-name">${escape(p.name)}</h2><p class="detail-sub">${escape(p.category)} · ${escape(plan.chain)} · ${p.watchlist ? 'House watchlist' : 'Extended set'}</p></div><span class="detail-rank">MODEL RANK ${String(p.rank).padStart(2, '0')}</span></div>
-    <div class="detail-value"><div><label>CONDITIONAL IMPLIED VALUE</label><strong>${money(p.implied_value_usd)}</strong><small>Peer-error band ${money(p.low_value_usd)}–${money(p.high_value_usd)}</small></div><div><label>SNAPSHOT TVL</label><strong>${money(p.tvl_usd)}</strong><small>${pct(p.change_7d)} seven-day change</small></div><div><label>TIME TRACKED</label><strong>${p.age_days === null ? '—' : integer(p.age_days)}<small> days</small></strong><small>Not the protocol launch date</small></div></div>
-    <div class="detail-columns"><section><div class="detail-tabs" role="group" aria-label="Fieldnote section">${[['evidence', 'Valuation evidence'], ['farm', 'Farm & exit plan'], ['sources', 'Sources']].map(([tab, label]) => `<button data-detail-tab="${tab}" aria-pressed="${detailTab === tab}" class="${detailTab === tab ? 'selected' : ''}">${label}</button>`).join('')}</div><div class="detail-panel">${detailTab === 'farm' ? farm : detailTab === 'sources' ? sources : evidence}</div></section>
-    <aside class="research-note"><p class="eyebrow">${escape(signalLabel(p))}</p><h3>${escape(notes?.title ?? 'The route is still a hypothesis.')}</h3><p>${escape(notes?.summary ?? 'No protocol-specific documentation has been reviewed. The model can rank this record, but the snapshot cannot verify its app, assets or reward rules.')}</p><div class="stop-box"><strong>STOP CONDITION</strong><p>${escape(notes?.stop ?? 'Stop before funding until the actual product, supported assets and exit route are verified.')}</p></div>
-    <h4>What still needs checking</h4><ul>${[...p.review_reasons, 'Reward / token allocation unverified'].map(reason => `<li>${escape(reason)}</li>`).join('')}</ul><p class="note">Snapshot ${radar.as_of}${notes ? ` · Docs ${RESEARCH_DATE}` : ''}. Never a trade recommendation.</p></aside></div>`;
-  const select = $('pilot-budget');
-  if (select) select.addEventListener('change', () => {
-    const value = Number(select.value);
-    if ([50, 100, 500].includes(value)) { pilotBudget = value; renderDetail(); $('pilot-budget').focus(); }
-  });
-}
-
 function view(name) {
-  const page = ['radar', 'universe', 'model'].includes(name) ? name : 'radar';
-  for (const key of ['radar', 'universe', 'model']) $(`${key}-view`).hidden = key !== page;
-  document.querySelectorAll('[data-nav]').forEach(link => link.classList.toggle('active', link.dataset.nav === page));
-  $('breadcrumb').textContent = { radar: 'LAUNCH RADAR', universe: 'UNIVERSE LEDGER', model: 'VALUE METHODOLOGY' }[page];
+  const page = ['radar', 'ledger', 'model'].includes(name) ? name : 'radar';
+  for (const k of ['radar', 'ledger', 'model']) $(`${k}-view`).hidden = k !== page;
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === page));
+  $('crumb').textContent = { radar: 'LAUNCH RADAR', ledger: 'THE 758 LEDGER', model: 'METHOD AND TESTS' }[page];
 }
-
 function route() {
   const hash = location.hash.slice(1);
   if (hash.startsWith('detail=')) {
     view('radar');
-    const params = new URLSearchParams(hash);
-    const tab = ['evidence', 'farm', 'sources'].includes(params.get('tab')) ? params.get('tab') : 'evidence';
-    openDetail(params.get('detail'), tab);
+    const q = new URLSearchParams(hash);
+    detail(q.get('detail'), q.get('tab') === 'farm' ? 'farm' : 'evidence');
     return;
   }
   if ($('detail').open) $('detail').close();
-  if (hash === 'filtered') {
-    view('radar');
-    state.scope = 'early'; state.page = 0;
-    scopeButtons(); renderBoard();
-  } else view(hash);
+  if (hash === 'filtered') { view('radar'); state.verdict = 'farm'; state.page = 0; sync(); board(); return; }
+  view(hash);
 }
-
+function sync() {
+  document.querySelectorAll('[data-verdict]').forEach(b => { const on = b.dataset.verdict === state.verdict; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  document.querySelectorAll('[data-scope]').forEach(b => { const on = b.dataset.scope === state.scope; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  $('deposit').value = String(state.deposit); $('share').value = String(state.share);
+}
 function bind() {
-  $('main').addEventListener('click', event => {
-    const open = event.target.closest('[data-open]');
+  $('main').addEventListener('click', ev => {
+    const open = ev.target.closest('[data-open]');
     if (open) location.hash = `detail=${encodeURIComponent(open.dataset.open)}`;
-    if (event.target.closest('[data-method]')) location.hash = 'model';
+    if (ev.target.closest('#method-link')) location.hash = 'model';
   });
-  $('detail-content').addEventListener('click', event => {
-    const button = event.target.closest('[data-detail-tab]');
-    if (button) { detailTab = button.dataset.detailTab; renderDetail(); }
-  });
-  $('board-body').addEventListener('click', event => {
-    const button = event.target.closest('[data-detail]');
-    if (button) location.hash = `detail=${encodeURIComponent(button.dataset.detail)}`;
-  });
-  $('close-detail').addEventListener('click', () => $('detail').close());
-  $('detail').addEventListener('close', () => {
-    if (location.hash.startsWith('#detail=')) history.replaceState(null, '', '#radar');
-  });
-  document.querySelectorAll('[data-scope]').forEach(button => button.addEventListener('click', () => {
-    state.scope = button.dataset.scope; state.page = 0; scopeButtons(); renderBoard();
+  $('dlg').addEventListener('click', ev => { const t = ev.target.closest('[data-tab]'); if (t) detail(state.open, t.dataset.tab); });
+  $('close').addEventListener('click', () => $('detail').close());
+  $('detail').addEventListener('close', () => { if (location.hash.startsWith('#detail=')) history.replaceState(null, '', '#radar'); });
+  document.querySelectorAll('[data-verdict]').forEach(b => b.addEventListener('click', () => { state.verdict = b.dataset.verdict; state.page = 0; sync(); board(); }));
+  document.querySelectorAll('[data-scope]').forEach(b => b.addEventListener('click', () => { state.scope = b.dataset.scope; state.page = 0; sync(); board(); }));
+  document.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.sort;
+    state.dir = state.sort === k ? -state.dir : k === 'name' ? 1 : -1;
+    state.sort = k; state.page = 0; board();
   }));
-  document.querySelectorAll('[data-sort]').forEach(button => button.addEventListener('click', () => {
-    const key = button.dataset.sort;
-    state.direction = state.sort === key ? -state.direction : key === 'name' ? 1 : -1;
-    state.sort = key; state.page = 0; renderBoard();
-  }));
-  for (const [id, key, event] of [['search', 'search', 'input'], ['category', 'category', 'change'], ['chain', 'chain', 'change']]) {
-    $(id).addEventListener(event, () => { state[key] = $(id).value; state.page = 0; renderBoard(); });
+  for (const [id, key, ev] of [['search', 'search', 'input'], ['category', 'category', 'change'], ['chain', 'chain', 'change']]) {
+    $(id).addEventListener(ev, () => { state[key] = $(id).value; state.page = 0; board(); });
   }
-  $('review-filter').addEventListener('change', () => { state.review = $('review-filter').checked; state.page = 0; renderBoard(); });
+  $('deposit').addEventListener('change', () => { state.deposit = $('deposit').value === 'plan' ? 'plan' : Number($('deposit').value); state.page = 0; board(); guide(); });
+  $('share').addEventListener('change', () => { state.share = Number($('share').value); state.page = 0; board(); guide(); });
+  $('review').addEventListener('change', () => { state.review = $('review').checked; state.page = 0; board(); });
+  const reset = () => { Object.assign(state, { verdict: 'all', scope: 'all', search: '', category: '', chain: '', review: false, page: 0 });
+    $('search').value = ''; $('category').value = ''; $('chain').value = ''; $('review').checked = false; sync(); board(); };
   $('reset').addEventListener('click', reset); $('empty-reset').addEventListener('click', reset);
-  $('previous').addEventListener('click', () => { state.page--; renderBoard(); });
-  $('next').addEventListener('click', () => { state.page++; renderBoard(); });
-  $('method-link').addEventListener('click', () => { location.hash = 'model'; });
-  for (const [id, key, event] of [['ledger-search', 'ledgerSearch', 'input'], ['ledger-status', 'ledgerStatus', 'change']]) {
-    $(id).addEventListener(event, () => { state[key] = $(id).value; state.ledgerPage = 0; renderLedger(); });
+  $('prev').addEventListener('click', () => { state.page--; board(); });
+  $('next').addEventListener('click', () => { state.page++; board(); });
+  for (const [id, key, ev] of [['ledger-search', 'ledgerSearch', 'input'], ['ledger-status', 'ledgerGroup', 'change']]) {
+    $(id).addEventListener(ev, () => { state[key] = $(id).value; state.ledgerPage = 0; ledger(); });
   }
-  $('ledger-previous').addEventListener('click', () => { state.ledgerPage--; renderLedger(); });
-  $('ledger-next').addEventListener('click', () => { state.ledgerPage++; renderLedger(); });
+  $('ledger-prev').addEventListener('click', () => { state.ledgerPage--; ledger(); });
+  $('ledger-next').addEventListener('click', () => { state.ledgerPage++; ledger(); });
   window.addEventListener('hashchange', route);
 }
-
 try {
-  const snapshot = validateSnapshot(window.FIELDNOTE_SNAPSHOT);
-  radar = buildRadar(snapshot);
-  stats();
-  options($('category'), radar.rows.map(p => p.category).filter(Boolean), 'All sectors');
-  options($('chain'), radar.rows.flatMap(p => p.chains), 'All networks');
-  renderBoard(); renderOverview(); renderLedger(); renderModel(); bind(); route();
+  radar = buildRadar(validateSnapshot(window.FIELDNOTE_SNAPSHOT), window.FIELDNOTE_PLANS ?? {});
+  kpis(); ledgerStrip(); guide();
+  $('category').innerHTML = '<option value="">All sectors</option>' + [...new Set(radar.rows.map(p => p.category).filter(Boolean).sort(cmp))].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  $('chain').innerHTML = '<option value="">All chains</option>' + [...new Set(radar.rows.flatMap(p => p.chains).sort(cmp))].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sync(); board(); ledger(); model(); bind(); route();
+  verify().then(r => { proof = r; strip(); }).catch(() => { proof = { ok: false }; strip(); });
 } catch (error) {
   $('fatal').hidden = false;
-  $('fatal').textContent = `FIELDNOTE could not load: ${error.message} Serve the generated out/ directory, not the source dashboard/. See README.md.`;
+  $('fatal').textContent = `FIELDNOTE could not load: ${error.message} Serve the generated output directory over local HTTP; see README.md.`;
   $('radar-view').hidden = true;
 }

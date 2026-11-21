@@ -1,7 +1,9 @@
 import { readFile, writeFile, mkdir, readdir, copyFile, chmod } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { buildRadar, validateSnapshot } from './dashboard/engine.js';
+import { plansFor } from './lib/plans.js';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,13 +53,19 @@ async function main() {
   const input = await readFile(options.input);
   if (input.byteLength > MAX_INPUT_BYTES) throw new Error('Snapshot exceeds the 8 MiB input limit.');
   const snapshot = validateSnapshot(JSON.parse(input.toString('utf8')));
-  const radar = buildRadar(snapshot);
+  const radar = buildRadar(snapshot, plansFor(snapshot));
   const out = resolve(options.output);
   await mkdir(out, { recursive: true, mode: 0o755 });
   await writeFile(join(out, 'board.json'), JSON.stringify({ model: radar.version, as_of: radar.as_of, rows: radar.rows }) + '\n', { mode: 0o644 });
   // Keep the frozen input outside dashboard/: its source stays readable within the dossier's 64 KiB.
   const safeJSON = JSON.stringify(snapshot).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
-  await writeFile(join(out, 'data.js'), `window.FIELDNOTE_SNAPSHOT=${safeJSON};\n`, { mode: 0o644 });
+  // The page recomputes the board and hashes it in the browser; the digest proves the two agree.
+  const digest = createHash('sha256').update(radar.rows.map(r => `${r.slug}:${r.implied_value_usd}`).join('\n')).digest('hex');
+  const boardCard = JSON.stringify({ rows: radar.rows.length, digest, total_usd: radar.board_value_usd, watchlist: radar.watchlist_size });
+  // Plans are build-time copy; the board reads them as data so the dossier keeps the model and its tests.
+  const planData = JSON.stringify(Object.fromEntries(radar.rows.map(r => [r.slug, r.plan])))
+    .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  await writeFile(join(out, 'data.js'), `window.FIELDNOTE_SNAPSHOT=${safeJSON};\nwindow.FIELDNOTE_BOARD=${boardCard};\nwindow.FIELDNOTE_PLANS=${planData};\n`, { mode: 0o644 });
   await copyFile(join(HERE, 'research-data.js'), join(out, 'research-data.js'));
   await chmod(join(out, 'research-data.js'), 0o644);
   await copyDirectory(join(HERE, 'dashboard'), join(out, 'dashboard'));
@@ -66,6 +74,9 @@ async function main() {
     model: radar.version, as_of: radar.as_of, protocols: radar.universe_size,
     candidates: radar.rows.length, watchlist_covered: radar.rows.filter(p => p.watchlist).length,
     peers: radar.model.peer_count, validation: radar.model.validation,
+    odds: radar.odds, odds_check: radar.odds_check, verdicts: radar.verdicts,
+    ledger_groups: radar.ledger_groups, ledger_total: radar.ledger_total,
+    board_value_usd: radar.board_value_usd, digest,
   };
   await writeFile(join(out, 'validation.json'), JSON.stringify(summary, null, 2) + '\n', { mode: 0o644 });
   if (options.preview) {
