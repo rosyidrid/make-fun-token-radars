@@ -96,6 +96,44 @@ function guide() {
     ${b ? `<p class="note">Best on the board: ${esc(b.name)}, ${cash(b.net)} net in ${b.hours.toFixed(1)} hands-on hours.</p>` : ''}
     <p class="note">Rewards are unverified and capital can be lost.</p>`;
 }
+/** The comps evidence, drawn: market cap against TVL for the traded tokens, with the fitted size curve. */
+function chart() {
+  const index = new Map((window.FIELDNOTE_SNAPSHOT?.protocols ?? []).map(p => [p.slug, p]));
+  const peers = radar.model.peer_slugs.map(s => index.get(s)).filter(Boolean);
+  if (peers.length < 5 || !$('chart')) return;
+  const W = 900, H = 96, L = 44, R = 8, T = 14, B = 18;
+  const l10 = v => Math.log10(v);
+  const xs = peers.map(p => l10(p.tvl_usd)), ys = peers.map(p => l10(p.mcap_usd));
+  const x0 = Math.floor(Math.min(...xs)), x1 = Math.ceil(Math.max(...xs));
+  const y0 = Math.floor(Math.min(...ys)), y1 = Math.ceil(Math.max(...ys));
+  const px = v => L + (v - x0) / (x1 - x0) * (W - L - R);
+  const py = v => H - B - (v - y0) / (y1 - y0) * (H - T - B);
+  const [b0, b1] = radar.model.coefficients;
+  const short = v => v >= 1e9 ? `$${+(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${+(v / 1e6).toPrecision(3)}M` : `$${Math.round(v)}`;
+  const grid = [];
+  for (let t = x0; t <= x1; t++) grid.push(`<line x1="${px(t).toFixed(1)}" y1="${T}" x2="${px(t).toFixed(1)}" y2="${(H - B).toFixed(1)}" stroke="#e3e8da"/><text x="${px(t).toFixed(1)}" y="${H - B + 15}" text-anchor="middle" font-size="9" fill="#5f6d62">${short(10 ** t)}</text>`);
+  for (let t = y0; t <= y1; t++) grid.push(`<line x1="${L}" y1="${py(t).toFixed(1)}" x2="${W - R}" y2="${py(t).toFixed(1)}" stroke="#e3e8da"/><text x="${L - 6}" y="${py(t).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#5f6d62">${short(10 ** t)}</text>`);
+  const line = [];
+  for (let i = 0; i <= 60; i++) {
+    const t = x0 + (x1 - x0) * i / 60;
+    line.push(`${px(t).toFixed(1)},${py(b0 / Math.LN10 + b1 * (t - 8)).toFixed(1)}`);
+  }
+  const dots = peers.map(p => `<circle cx="${px(l10(p.tvl_usd)).toFixed(1)}" cy="${py(l10(p.mcap_usd)).toFixed(1)}" r="2.5" fill="#7fa06a" fill-opacity=".78"><title>${esc(p.name)} · TVL ${money(p.tvl_usd)} · cap ${money(p.mcap_usd)}</title></circle>`).join('');
+  $('chart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Market cap against TVL for the traded-token comparables, with the fitted size curve.">${grid.join('')}<polyline points="${line.join(' ')}" fill="none" stroke="#1f4b39" stroke-width="1.6"/>${dots}<text x="${L}" y="${T - 4}" font-size="9" fill="#22392f">${peers.length} traded tokens · market cap vs TVL · fitted size curve</text></svg>`;
+  $('chart-note').textContent = `cap = a · TVL^${b1.toFixed(2)} · sector · growth · age`;
+}
+/** The board as a file a reader can take away; built offline, downloaded by the browser. */
+function exportCsv() {
+  const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  const head = ['rank', 'slug', 'name', 'category', 'tvl_usd', 'change_7d', 'no_token_days', 'launch_odds', 'implied_value_usd', 'p25_usd', 'p75_usd', 'verdict', 'net_usd', 'per_hour_usd', 'plan', 'documented'];
+  const lines = radar.rows.map(p => { const e = scenario(p); return [p.rank, p.slug, p.name, p.category ?? '', p.tvl_usd, p.change_7d ?? '', p.age_days ?? '', p.launch_odds.toFixed(4), p.implied_value_usd, p.p25_usd, p.p75_usd, e.verdict, e.net.toFixed(2), e.tradeable ? e.per_hour.toFixed(2) : '', p.plan.label, p.plan.documented].map(cell).join(','); });
+  const blob = new Blob([`${head.join(',')}\n${lines.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `fieldnote-${radar.as_of}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 const icon = p => {
   const hue = [106, 40, 168, 22, 70, 210][[...p.slug].reduce((n, c) => n + c.charCodeAt(0), 0) % 6];
   return `<span class="ico" style="--icon-bg:hsl(${hue} 24% 91%);--icon-ink:hsl(${hue} 24% 32%)" aria-hidden="true">${esc(p.name[0])}</span>`;
@@ -104,7 +142,7 @@ function board() {
   const rows = rowsFor(), max = Math.max(...radar.rows.map(r => r.implied_value_usd));
   state.page = Math.min(state.page, Math.max(0, Math.ceil(rows.length / PAGE) - 1));
   const start = state.page * PAGE;
-  $('body').innerHTML = rows.slice(start, start + PAGE).map(({ p, e }) => `<tr><td class="id">${String(p.rank).padStart(3, '0')}</td>
+  $('body').innerHTML = rows.slice(start, start + PAGE).map(({ p, e }) => `<tr><td class="id">${String(p.rank).padStart(3, '0')}<span class="muted" style="display:block;font-size:8px">${p.rank_low === null ? '' : `${p.rank_low}–${p.rank_high}`}</span></td>
       <td><span class="who"><button data-open="${esc(p.slug)}" aria-label="Open ${esc(p.name)}">${icon(p)}<span><strong>${esc(p.name)}</strong><small>${esc(p.category ?? 'Unclassified')}${p.watchlist ? ' · watchlist' : ''}${p.review_required ? ' · flag' : ''}</small></span></button></span></td>
       <td class="num val"><strong>${money(p.implied_value_usd)}</strong><small>${money(p.p25_usd)}–${money(p.p75_usd)}</small><span class="sbar" style="width:${Math.max(3, p.implied_value_usd / max * 42)}px" aria-hidden="true"></span></td>
       <td class="num"><strong>${(p.launch_odds * 100).toFixed(0)}%</strong><small>${p.rank_low === null ? '' : `rank ${p.rank_low}–${p.rank_high}`}</small></td>
@@ -241,6 +279,7 @@ function bind() {
   const reset = () => { Object.assign(state, { verdict: 'all', scope: 'all', search: '', category: '', chain: '', review: false, page: 0 });
     $('search').value = ''; $('category').value = ''; $('chain').value = ''; $('review').checked = false; sync(); board(); };
   $('reset').addEventListener('click', reset); $('empty-reset').addEventListener('click', reset);
+  $('csv').addEventListener('click', exportCsv);
   $('prev').addEventListener('click', () => { state.page--; board(); });
   $('next').addEventListener('click', () => { state.page++; board(); });
   for (const [id, key, ev] of [['ledger-search', 'ledgerSearch', 'input'], ['ledger-status', 'ledgerGroup', 'change']]) {
@@ -252,7 +291,7 @@ function bind() {
 }
 try {
   radar = buildRadar(validateSnapshot(window.FIELDNOTE_SNAPSHOT), window.FIELDNOTE_PLANS ?? {});
-  kpis(); ledgerStrip(); guide();
+  kpis(); ledgerStrip(); guide(); chart();
   $('category').innerHTML = '<option value="">All sectors</option>' + [...new Set(radar.rows.map(p => p.category).filter(Boolean).sort(cmp))].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   $('chain').innerHTML = '<option value="">All chains</option>' + [...new Set(radar.rows.flatMap(p => p.chains).sort(cmp))].map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   sync(); board(); ledger(); model(); bind(); route();

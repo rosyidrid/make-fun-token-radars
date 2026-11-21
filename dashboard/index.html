@@ -18,8 +18,11 @@
 <section id="radar-view" class="view">
   <div class="row head"><div><p class="eyebrow">THE PRE-TOKEN FIELD GUIDE</p><h1>Value it. Price the <em>odds.</em> Cost the exit.</h1><p class="intro">Two fitted models over one frozen snapshot: what a token would be worth, and how likely one arrives.</p></div><div class="head-note">SNAPSHOT ≠ REALITY<span>Verify the missing pieces before you fund anything.</span></div></div>
   <div class="kpis" id="kpis"></div>
-  <section class="card" style="padding:12px 14px;margin-bottom:12px"><div class="row" style="margin-bottom:9px"><p class="eyebrow" style="margin:0">EVERY PROTOCOL IN ONE GROUP</p><span class="eyebrow" id="ledger-total"></span></div><div class="ledger-bar" id="ledger-bar"></div><div class="ledger-legend" id="ledger-legend"></div></section>
   <div class="strip" id="strip"></div>
+  <div class="duo">
+    <section class="card" style="padding:12px 14px"><div class="row" style="margin-bottom:9px"><p class="eyebrow" style="margin:0">EVERY PROTOCOL IN ONE GROUP</p><span class="eyebrow" id="ledger-total"></span></div><div class="ledger-bar" id="ledger-bar"></div><div class="ledger-legend" id="ledger-legend"></div></section>
+    <section class="card" style="padding:12px 14px"><div class="row" style="margin-bottom:6px"><p class="eyebrow" style="margin:0">WHERE THE VALUE COMES FROM</p><span class="eyebrow" id="chart-note"></span></div><div class="chart" id="chart"></div></section>
+  </div>
   <div class="row head"><h2>The board <span class="muted" id="caption"></span></h2><button id="method-link" style="background:none;border:0;color:var(--green);font-size:11px">How we value a launch ↗</button></div>
   <div class="bar">
     <div class="seg" role="group" aria-label="Verdict"><button data-verdict="all" class="on" aria-pressed="true">All</button><button data-verdict="farm" aria-pressed="false">Farm <b id="n-farm"></b></button><button data-verdict="marginal" aria-pressed="false">Marginal <b id="n-marginal"></b></button><button data-verdict="skip" aria-pressed="false">Skip <b id="n-skip"></b></button></div>
@@ -32,7 +35,7 @@
     <label>Deposit <select id="deposit"><option value="10000">$10,000</option><option value="1000">$1,000</option><option value="5000">$5,000</option><option value="25000">$25,000</option><option value="plan">0.02% of TVL</option></select></label>
     <label>Drop share <select id="share"><option value="0.035">3.5%</option><option value="0.07" selected>7%</option><option value="0.14">14%</option></select></label>
     <label><input id="review" type="checkbox"> Flags only</label>
-    <button id="reset" style="background:none;border:0;color:var(--green);font-size:10px">Reset</button><span id="count" role="status"></span>
+    <button id="reset" style="background:none;border:0;color:var(--green);font-size:10px">Reset</button><button id="csv" class="seg">CSV</button><span id="count" role="status"></span>
   </div>
   <div class="panel"><div class="table-wrap">
     <table id="board"><caption class="sr-only">Protocols ranked by conditional implied value. Odds, verdict and cost are fitted or modelled, never promises.</caption>

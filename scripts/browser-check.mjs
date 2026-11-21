@@ -35,6 +35,9 @@ try {
   assert.match(await page.locator('#strip').innerText(), /ranks 1 to N in order/);
   assert.match(await page.locator('#strip').innerText(), /watchlist 40 of 40 ranked/);
   assert.notEqual(await page.locator('body').evaluate(n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)');
+  assert.ok(await page.locator('#chart svg circle').count() > 50, 'the comps chart draws the traded tokens');
+  assert.equal(await page.locator('#chart svg polyline').count(), 1, 'the fitted size curve is drawn once');
+  assert.equal(await page.locator('#csv').isVisible(), true);
 
   // The page's own model must equal the submitted board row for row.
   const board = JSON.parse(await readFile('out/board.json', 'utf8'));
@@ -107,7 +110,7 @@ try {
   for (const [name, hash, act] of [
     ['1-board.png', 'radar', null],
     ['2-detail.png', 'detail=steakhouse-financial', null],
-    ['3-filtered.png', 'radar', async () => page.getByRole('button', { name: /^Farm/ }).click()],
+    ['3-filtered.png', 'radar', async () => page.getByRole('button', { name: 'Watchlist', exact: true }).click()],
     ['4-plan.png', 'detail=veda&tab=farm', null],
   ]) {
     await visitBoard(hash);
