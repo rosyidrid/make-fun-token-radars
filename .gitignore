@@ -1,0 +1,15 @@
+out/
+out-*/
+node_modules/
+test-results/
+screenshots/*.tmp
+.DS_Store
+.env
+.env.*
+.makefun-local/
+makefun-keypair.json
+credentials
+transcripts/
+transcripts*.json*
+transcripts*.tar*
+*.bundle

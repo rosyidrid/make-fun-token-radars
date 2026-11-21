@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FIELDNOTE — Before the ticker</title>
+  <link rel="stylesheet" href="./app.css">
+  <script src="../data.js" defer></script>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to research</a>
+  <aside class="sidebar">
+    <a class="wordmark" href="#radar" aria-label="Fieldnote home"><span class="mark">f<span>n</span></span>FIELDNOTE<span class="edition">01</span></a>
+    <p class="sidebar-label">RESEARCH DESK</p>
+    <nav aria-label="Main navigation">
+      <a href="#radar" data-nav="radar" class="active"><span>◉</span> Launch radar <b id="nav-count">—</b></a>
+      <a href="#universe" data-nav="universe"><span>▦</span> Universe ledger</a>
+      <a href="#model" data-nav="model"><span>⌁</span> Value methodology</a>
+    </nav>
+    <section class="desk-note"><span class="tiny-dot"></span> THE RESEARCH STANDARD
+      <p>Missing a ticker.<br>Not missing the risk.</p>
+      <small>No token record is not proof that a token does not exist. Verify before you act.</small>
+    </section>
+    <div class="sidebar-bottom"><span>FROZEN SNAPSHOT</span><strong id="side-date">Loading…</strong><small>Offline by design · No wallet connection</small></div>
+  </aside>
+  <main id="main">
+    <header class="topbar"><span>RESEARCH / <b id="breadcrumb">LAUNCH RADAR</b></span><span class="snapshot-pill"><i></i> SEALED DATA <span id="top-date"></span></span></header>
+    <div id="fatal" role="alert" hidden></div>
+    <section id="radar-view" class="view">
+      <div class="heading-row"><div><p class="eyebrow">THE PRE-TOKEN FIELD GUIDE / RESEARCH EDITION 02</p><h1>Before the <em>ticker.</em></h1><p class="intro">A valuation is a starting point. The evidence decides what deserves a second look.</p></div><div class="edition-note">SNAPSHOT ≠ REALITY<span>Verify the missing pieces.</span></div></div>
+      <div class="stats" id="stats"></div>
+      <section class="research-overview" aria-label="Research overview">
+        <article class="map-card"><div class="card-heading"><div><p class="eyebrow">THE OPPORTUNITY LANDSCAPE</p><h2>Capital meets conditional value.</h2></div><span>LOG SCALES · NOT PRICE HISTORY</span></div><div id="market-map"></div></article>
+        <article class="brief-card"><p class="eyebrow">THE REALITY CHECK</p><div id="research-brief"></div></article>
+      </section>
+      <div class="section-title"><h2>The research board <span id="candidate-caption"></span></h2><button class="text-button" id="method-link">How we value a launch <span>↗</span></button></div>
+      <div class="toolbar">
+        <div class="tabs" role="group" aria-label="Candidate scope"><button data-scope="all" class="selected" aria-pressed="true">All candidates</button><button data-scope="watchlist" aria-pressed="false">House watchlist</button><button data-scope="early" aria-pressed="false">Below the floor</button><button data-scope="documented" aria-pressed="false">Documented routes</button></div>
+        <label class="search"><span aria-hidden="true">⌕</span><span class="sr-only">Search protocols</span><input id="search" type="search" placeholder="Find a protocol…" autocomplete="off"></label>
+      </div>
+      <div class="filterbar"><label>Sector <select id="category"><option value="">All sectors</option></select></label><label>Network <select id="chain"><option value="">All networks</option></select></label><label class="check"><input id="review-filter" type="checkbox"> Show review flags</label><button id="reset" class="text-button">Reset filters</button><span id="result-count" role="status"></span></div>
+      <div class="board-layout"><div class="table-wrap"><table id="board-table"><caption class="sr-only">Protocols ranked by conditional implied token market capitalization. Select a row to inspect its model and research plan.</caption><thead><tr>
+        <th scope="col">#</th><th scope="col"><button data-sort="name">PROTOCOL <span>↕</span></button></th><th scope="col" class="numeric"><button data-sort="implied_value_usd">IMPLIED VALUE <span>↓</span></button></th><th scope="col" class="numeric"><button data-sort="tvl_usd">TVL <span>↕</span></button></th><th scope="col" class="numeric"><button data-sort="change_7d">7D TVL <span>↕</span></button></th><th scope="col">RESEARCH ROUTE</th><th scope="col"><span class="sr-only">Inspect</span></th>
+      </tr></thead><tbody id="board-body"></tbody></table><div id="empty" class="empty" hidden><h3>No protocols match this field.</h3><p>Try another sector, network or search term.</p><button id="empty-reset">Clear filters</button></div><div class="pagination"><span id="page-info"></span><div><button id="previous" aria-label="Previous page">←</button><button id="next" aria-label="Next page">→</button></div></div></div>
+      <aside class="field-guide" id="insight-panel"></aside></div>
+      <footer class="page-footer"><span>Conditional market-cap estimates in USD · Never FDV or token price</span><span id="coverage-note"></span></footer>
+    </section>
+    <section id="universe-view" class="view" hidden>
+      <p class="eyebrow">EVERY RECORD ACCOUNTED FOR</p><h1>The whole <em>field.</em></h1><p class="intro">Candidates, token-bearing records, and excluded products. Nothing quietly disappears.</p>
+      <div class="ledger-summary" id="ledger-summary"></div>
+      <div class="toolbar"><label class="search"><span aria-hidden="true">⌕</span><span class="sr-only">Search universe</span><input id="ledger-search" type="search" placeholder="Search the full universe…"></label><label>Status <select id="ledger-status"><option value="">Every status</option><option value="candidate">Candidates</option><option value="recorded">Token recorded</option><option value="excluded">Excluded exposure</option></select></label></div>
+      <div class="table-wrap"><table><caption class="sr-only">Full protocol classification ledger</caption><thead><tr><th>PROTOCOL</th><th>CLASSIFICATION</th><th>WHY IT IS HERE</th><th class="numeric">TVL</th></tr></thead><tbody id="ledger-body"></tbody></table><div class="pagination"><span id="ledger-info"></span><div><button id="ledger-previous">← Previous</button><button id="ledger-next">Next →</button></div></div></div>
+    </section>
+    <section id="model-view" class="view" hidden>
+      <p class="eyebrow">NO SECRET SCORE</p><h1>Show your <em>work.</em></h1><p class="intro">One transparent model, fitted to the frozen snapshot. The same engine runs here and in the submitted program.</p>
+      <div id="model-content"></div>
+    </section>
+  </main>
+  <dialog id="detail" aria-labelledby="detail-name"><div class="dialog-top"><span class="eyebrow">PROTOCOL FIELDNOTE</span><button id="close-detail" class="close-button" aria-label="Close protocol details">×</button></div><div id="detail-content"></div></dialog>
+  <noscript>This offline research dashboard requires JavaScript. Open it through the local preview server described in README.md.</noscript>
+</body>
+</html>
